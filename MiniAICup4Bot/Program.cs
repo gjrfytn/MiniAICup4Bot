@@ -55,7 +55,7 @@ namespace MiniAICup4Bot
         {
             _Configuration = configuration;
 
-            _Field = new int?[_Configuration.XCellsCount * _Configuration.CellSize, _Configuration.YCellsCount * _Configuration.CellSize];
+            _Field = new int?[_Configuration.XCellsCount, _Configuration.YCellsCount];
         }
 
         public Action MakeTurn(TickData tickData)
@@ -68,6 +68,18 @@ namespace MiniAICup4Bot
             var evaluations = new Dictionary<Direction, int>();
 
             WeightField();
+
+#if DEBUG
+            using (var f = System.IO.File.CreateText("test.txt"))
+            {
+                for (var y = 0; y < _Field.GetLength(1); ++y)
+                {
+                    f.WriteLine();
+                    for (var x = 0; x < _Field.GetLength(0); ++x)
+                        f.Write($" {_Field[x, y],-3}");
+                }
+            }
+#endif
 
             foreach (var direction in System.Enum.GetValues(typeof(Direction)).Cast<Direction>())
                 evaluations[direction] = EvaluateDirection(direction, dtick);
@@ -84,33 +96,34 @@ namespace MiniAICup4Bot
 
             var thisLineLength = _TickData.ThisPlayer.Lines.Count();
             foreach (var territoryPoint in _TickData.ThisPlayer.Territory)
-                _Field[territoryPoint.X, territoryPoint.Y] = thisLineLength;
+                _Field[territoryPoint.X / _Configuration.CellSize, territoryPoint.Y / _Configuration.CellSize] = thisLineLength;
 
             foreach (var player in _TickData.OtherPlayers)
                 foreach (var territoryPoint in player.Territory)
-                    _Field[territoryPoint.X, territoryPoint.Y] = otherPlayerTerritoryWeight;
+                    _Field[territoryPoint.X / _Configuration.CellSize, territoryPoint.Y / _Configuration.CellSize] = otherPlayerTerritoryWeight;
 
             foreach (var player in _TickData.OtherPlayers)
-                if (_Field[player.Position.X, player.Position.Y].HasValue)
-                    _Field[player.Position.X, player.Position.Y] += otherPlayerWeight;
+                if (_Field[player.Position.X / _Configuration.CellSize, player.Position.Y / _Configuration.CellSize].HasValue)
+                    _Field[player.Position.X / _Configuration.CellSize, player.Position.Y / _Configuration.CellSize] += otherPlayerWeight;
                 else
-                    _Field[player.Position.X, player.Position.Y] = otherPlayerWeight;
+                    _Field[player.Position.X / _Configuration.CellSize, player.Position.Y / _Configuration.CellSize] = otherPlayerWeight;
 
             Propagate();
         }
 
         private void Propagate()
         {
-            var emptyPositions = new Queue<Position>();
+            var emptyPositions = new List<Position>();
 
             for (var y = 0; y < _Field.GetLength(1); ++y)
                 for (var x = 0; x < _Field.GetLength(0); ++x)
                     if (!_Field[x, y].HasValue)
-                        emptyPositions.Enqueue(new Position(x, y));
+                        emptyPositions.Add(new Position(x, y));
 
-            while (emptyPositions.Count > 0)
+            var index = 0;
+            while (emptyPositions.Any())
             {
-                var pos = emptyPositions.Peek();
+                var pos = emptyPositions[index];
 
                 var weights = new List<int?>
                 {
@@ -124,9 +137,14 @@ namespace MiniAICup4Bot
 
                 if (filledWeights.Any())
                 {
-                    emptyPositions.Dequeue();
+                    emptyPositions.Remove(pos);
                     _Field[pos.X, pos.Y] = (int)Math.Round(filledWeights.Select(w => w.Value - Math.Sign(w.Value) * -1).Average());
                 }
+
+                index++;
+
+                if (index >= emptyPositions.Count)
+                    index = 0;
             }
         }
 
@@ -134,7 +152,7 @@ namespace MiniAICup4Bot
         {
             var near = pos.Move(direction, 1);
 
-            return InField(near) ? _Field[near.X, near.Y] : null;
+            return near.X >= 0 && near.Y >= 0 && near.X < _Field.GetLength(0) && near.Y < _Field.GetLength(1) ? _Field[near.X, near.Y] : null;
         }
 
         private int EvaluateDirection(Direction direction, uint dtick)
@@ -146,13 +164,16 @@ namespace MiniAICup4Bot
 
             var newPos = _TickData.ThisPlayer.Position.Move(direction, _Configuration.Speed * dtick);
 
-            if (!InField(newPos))
+            if (newPos.X < 0 ||
+                newPos.Y < 0 ||
+                newPos.X > _Configuration.CellSize * _Configuration.XCellsCount ||
+                newPos.Y > _Configuration.CellSize * _Configuration.YCellsCount)
                 return noGoEval;
 
             if (OnPlayerLine(newPos))
                 return noGoEval;
 
-            var eval = _Field[newPos.X, newPos.Y].Value;
+            var eval = _Field[newPos.X / _Configuration.CellSize, newPos.Y / _Configuration.CellSize].Value;
 
             foreach (var player in _TickData.OtherPlayers)
                 if (player.Lines.Any(lp => lp == newPos))
@@ -179,7 +200,6 @@ namespace MiniAICup4Bot
 
             return false;
         }
-        private bool InField(Position newPos) => newPos.X >= 0 && newPos.Y >= 0 && newPos.X <= _Field.GetLength(0) && newPos.Y <= _Field.GetLength(1);
 
         private void DiscardField()
         {
