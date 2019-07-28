@@ -1,5 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using System.Xml.Linq;
 
@@ -69,18 +68,6 @@ namespace MiniAICup4Bot
 
             WeightField();
 
-#if DEBUG
-            using (var f = System.IO.File.CreateText("test.txt"))
-            {
-                for (var y = 0; y < _Field.GetLength(1); ++y)
-                {
-                    f.WriteLine();
-                    for (var x = 0; x < _Field.GetLength(0); ++x)
-                        f.Write($" {_Field[x, y],-3}");
-                }
-            }
-#endif
-
             foreach (var direction in System.Enum.GetValues(typeof(Direction)).Cast<Direction>())
                 evaluations[direction] = EvaluateDirection(direction, dtick);
 
@@ -109,7 +96,43 @@ namespace MiniAICup4Bot
                     _Field[player.Position.X / _Configuration.CellSize, player.Position.Y / _Configuration.CellSize] = otherPlayerWeight;
 
             Propagate();
+
+#if DEBUG
+            WriteFieldDebug();
+#endif
         }
+
+#if DEBUG
+        private void WriteFieldDebug()
+        {
+            using (var f = System.IO.File.CreateText("after_prop.txt"))
+            {
+                for (var y = _Field.GetLength(1) - 1; y >= 0; --y)
+                {
+                    f.WriteLine();
+                    for (var x = 0; x < _Field.GetLength(0); ++x)
+                    {
+                        f.Write($" {_Field[x, y].Value,-3}");
+                        var intensity = _Field[x, y].Value + 100;
+                    }
+                }
+            }
+
+            using (var bmp = new System.Drawing.Bitmap(_Field.GetLength(0), _Field.GetLength(1)))
+            {
+                for (var y = 0; y < _Field.GetLength(1); ++y)
+                {
+                    for (var x = 0; x < _Field.GetLength(0); ++x)
+                    {
+                        var intensity = _Field[x, y].Value + 100;
+                        bmp.SetPixel(x, _Field.GetLength(1) - y - 1, System.Drawing.Color.FromArgb(intensity, intensity, intensity));
+                    }
+                }
+
+                bmp.Save("after_prop.bmp");
+            }
+        }
+#endif
 
         private void Propagate()
         {
@@ -138,7 +161,7 @@ namespace MiniAICup4Bot
                 if (filledWeights.Any())
                 {
                     emptyPositions.Remove(pos);
-                    _Field[pos.X, pos.Y] = (int)Math.Round(filledWeights.Select(w => w.Value - Math.Sign(w.Value) * -1).Average());
+                    _Field[pos.X, pos.Y] = (int)System.Math.Round(filledWeights.Select(w => w.Value - System.Math.Sign(w.Value)).Average());
                 }
 
                 index++;
@@ -166,8 +189,8 @@ namespace MiniAICup4Bot
 
             if (newPos.X < 0 ||
                 newPos.Y < 0 ||
-                newPos.X > _Configuration.CellSize * _Configuration.XCellsCount ||
-                newPos.Y > _Configuration.CellSize * _Configuration.YCellsCount)
+                newPos.X >= _Configuration.CellSize * _Configuration.XCellsCount ||
+                newPos.Y >= _Configuration.CellSize * _Configuration.YCellsCount)
                 return noGoEval;
 
             if (OnPlayerLine(newPos))
