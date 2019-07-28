@@ -44,6 +44,8 @@ namespace MiniAICup4Bot
 
     internal class Bot
     {
+        private const int _SelfCrossingWeight = -666;
+
         private readonly GameConfiguration _Configuration;
         private readonly int[,] _Field;
 
@@ -84,27 +86,35 @@ namespace MiniAICup4Bot
             DiscardField();
 
             foreach (var linePoint in _TickData.ThisPlayer.Lines)
-                SetField(ToElementaryCellPos(linePoint), -101); //TODO
+                SetField(ToElementaryCellPos(linePoint), _SelfCrossingWeight); //TODO
 
+            var cornerRadiation = -15;
+            Radiate(new Position(0,0), cornerRadiation);
+            Radiate(new Position(0,(int)_Configuration.YCellsCount), cornerRadiation);
+            Radiate(new Position((int)_Configuration.XCellsCount, (int)_Configuration.YCellsCount), cornerRadiation);
+            Radiate(new Position((int)_Configuration.XCellsCount, 0), cornerRadiation);
+
+            var playerPos = ToElementaryCellPos(_TickData.ThisPlayer.Position);
             var thisLineLength = _TickData.ThisPlayer.Lines.Count();
-            var distanceToTerritory = _TickData.ThisPlayer.Territory.Min(t => System.Math.Abs(_TickData.ThisPlayer.Position.X - t.X) +
-                                                                              System.Math.Abs(_TickData.ThisPlayer.Position.Y - t.Y));
+            var distanceToTerritory = _TickData.ThisPlayer.Territory.Select(t => ToElementaryCellPos(t))
+                                                                    .Min(t => System.Math.Abs(playerPos.X - t.X) + System.Math.Abs(playerPos.Y - t.Y));
+
             foreach (var territoryPoint in _TickData.ThisPlayer.Territory)
-                Radiate(ToElementaryCellPos(territoryPoint), thisLineLength / 2 + distanceToTerritory / 2);
+                Radiate(ToElementaryCellPos(territoryPoint), thisLineLength + distanceToTerritory - 5);
 
             foreach (var player in _TickData.OtherPlayers)
                 foreach (var territoryPoint in player.Territory)
                     Radiate(ToElementaryCellPos(territoryPoint), 2);
 
             foreach (var player in _TickData.OtherPlayers)
-                Radiate(ToElementaryCellPos(player.Position), -15);
+                Radiate(ToElementaryCellPos(player.Position), -25);
 
             foreach (var player in _TickData.OtherPlayers)
                 foreach (var linePoint in player.Lines)
                     Radiate(ToElementaryCellPos(linePoint), 5);
 
             foreach (var bonus in _TickData.Bonuses.Where(b => b.type == BonusType.Nitro || b.type == BonusType.Saw))
-                Radiate(ToElementaryCellPos(bonus.position), 10);
+                Radiate(ToElementaryCellPos(bonus.position), 25);
 
             foreach (var bonus in _TickData.Bonuses.Where(b => b.type == BonusType.Slow))
             {
@@ -140,7 +150,7 @@ namespace MiniAICup4Bot
                     pos.Y >= 0 &&
                     pos.X < _Field.GetLength(0) &&
                     pos.Y < _Field.GetLength(1) &&
-                    _Field[pos.X, pos.Y] != -101)
+                    _Field[pos.X, pos.Y] != _SelfCrossingWeight)
                 {
                     _Field[pos.X, pos.Y] += weight;
 
