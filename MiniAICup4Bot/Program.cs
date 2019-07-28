@@ -20,7 +20,7 @@ namespace MiniAICup4Bot
             {
                 var tickString = System.Console.ReadLine();
 
-                if (tickString==null || tickString.Contains("end_game"))
+                if (tickString == null || tickString.Contains("end_game"))
                     break;
 
                 var tickData = new TickData(tickString);
@@ -87,22 +87,24 @@ namespace MiniAICup4Bot
                 SetField(ToElementaryCellPos(linePoint), -101); //TODO
 
             var thisLineLength = _TickData.ThisPlayer.Lines.Count();
+            var distanceToTerritory = _TickData.ThisPlayer.Territory.Min(t => System.Math.Abs(_TickData.ThisPlayer.Position.X - t.X) +
+                                                                              System.Math.Abs(_TickData.ThisPlayer.Position.Y - t.Y));
             foreach (var territoryPoint in _TickData.ThisPlayer.Territory)
-                Radiate(ToElementaryCellPos(territoryPoint), thisLineLength);
+                Radiate(ToElementaryCellPos(territoryPoint), thisLineLength / 2 + distanceToTerritory / 2);
 
             foreach (var player in _TickData.OtherPlayers)
                 foreach (var territoryPoint in player.Territory)
-                    Radiate(ToElementaryCellPos(territoryPoint), 1);
+                    Radiate(ToElementaryCellPos(territoryPoint), 2);
 
             foreach (var player in _TickData.OtherPlayers)
-                Radiate(ToElementaryCellPos(player.Position), -30);
+                Radiate(ToElementaryCellPos(player.Position), -15);
 
             foreach (var player in _TickData.OtherPlayers)
                 foreach (var linePoint in player.Lines)
-                    Radiate(ToElementaryCellPos(linePoint), 10);
+                    Radiate(ToElementaryCellPos(linePoint), 5);
 
             foreach (var bonus in _TickData.Bonuses.Where(b => b.type == BonusType.Nitro || b.type == BonusType.Saw))
-                Radiate(ToElementaryCellPos(bonus.position), 15);
+                Radiate(ToElementaryCellPos(bonus.position), 10);
 
             foreach (var bonus in _TickData.Bonuses.Where(b => b.type == BonusType.Slow))
             {
@@ -164,10 +166,7 @@ namespace MiniAICup4Bot
                 {
                     f.WriteLine();
                     for (var x = 0; x < _Field.GetLength(0); ++x)
-                    {
                         f.Write($"{_Field[x, y],-5}");
-                        var intensity = _Field[x, y] + 100;
-                    }
                 }
             }
 
@@ -199,7 +198,7 @@ namespace MiniAICup4Bot
         {
             const int noGoEval = int.MinValue;
 
-            if (direction==GetOppositeDirection(_CurrentDirection))
+            if (direction == GetOppositeDirection(_CurrentDirection))
                 return noGoEval;
 
             var newPos = _TickData.ThisPlayer.Position.Move(direction, _Configuration.Speed * dtick);
