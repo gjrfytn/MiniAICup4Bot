@@ -9,7 +9,7 @@ namespace MiniAICup4Bot
         private static void Main()
         {
 #if DEBUG
-            System.Threading.Thread.Sleep(5000);
+            System.Threading.Thread.Sleep(3000);
 #endif
 
             var configuration = new GameConfiguration(System.Console.ReadLine());
@@ -20,7 +20,7 @@ namespace MiniAICup4Bot
             {
                 var tickString = System.Console.ReadLine();
 
-                if (tickString.Contains("end_game"))
+                if (tickString==null || tickString.Contains("end_game"))
                     break;
 
                 var tickData = new TickData(tickString);
@@ -45,24 +45,25 @@ namespace MiniAICup4Bot
     internal class Bot
     {
         private readonly GameConfiguration _Configuration;
-        private readonly int?[,] _Field;
+        private readonly int[,] _Field;
 
         private TickData _TickData;
-        private int _PreviosTickNum = -6;
+        private Direction _CurrentDirection;
+        private int _PreviousTickNum = -6;
 
         public Bot(GameConfiguration configuration)
         {
             _Configuration = configuration;
 
-            _Field = new int?[_Configuration.XCellsCount, _Configuration.YCellsCount];
+            _Field = new int[_Configuration.XCellsCount, _Configuration.YCellsCount];
         }
 
         public Action MakeTurn(TickData tickData)
         {
             _TickData = tickData;
 
-            var dtick = (uint)(tickData.TickNum - _PreviosTickNum);
-            _PreviosTickNum = (int)tickData.TickNum;
+            var dtick = (uint)(tickData.TickNum - _PreviousTickNum);
+            _PreviousTickNum = (int)tickData.TickNum;
 
             var evaluations = new Dictionary<Direction, int>();
 
@@ -71,35 +72,87 @@ namespace MiniAICup4Bot
             foreach (var direction in System.Enum.GetValues(typeof(Direction)).Cast<Direction>())
                 evaluations[direction] = EvaluateDirection(direction, dtick);
 
-            return new Action(evaluations.OrderByDescending(e => e.Value).First().Key, "test");
+            var directionToGo = evaluations.OrderByDescending(e => e.Value).First().Key;
+
+            _CurrentDirection = directionToGo;
+
+            return new Action(directionToGo, "test");
         }
 
         private void WeightField()
         {
-            const int otherPlayerTerritoryWeight = 5;
-            const int otherPlayerWeight = -5;
-
             DiscardField();
+
+            foreach (var linePoint in _TickData.ThisPlayer.Lines)
+                SetField(ToElementaryCellPos(linePoint), -101); //TODO
 
             var thisLineLength = _TickData.ThisPlayer.Lines.Count();
             foreach (var territoryPoint in _TickData.ThisPlayer.Territory)
-                _Field[territoryPoint.X / _Configuration.CellSize, territoryPoint.Y / _Configuration.CellSize] = thisLineLength;
+                Radiate(ToElementaryCellPos(territoryPoint), thisLineLength);
 
             foreach (var player in _TickData.OtherPlayers)
                 foreach (var territoryPoint in player.Territory)
-                    _Field[territoryPoint.X / _Configuration.CellSize, territoryPoint.Y / _Configuration.CellSize] = otherPlayerTerritoryWeight;
+                    Radiate(ToElementaryCellPos(territoryPoint), 1);
 
             foreach (var player in _TickData.OtherPlayers)
-                if (_Field[player.Position.X / _Configuration.CellSize, player.Position.Y / _Configuration.CellSize].HasValue)
-                    _Field[player.Position.X / _Configuration.CellSize, player.Position.Y / _Configuration.CellSize] += otherPlayerWeight;
-                else
-                    _Field[player.Position.X / _Configuration.CellSize, player.Position.Y / _Configuration.CellSize] = otherPlayerWeight;
+                Radiate(ToElementaryCellPos(player.Position), -30);
 
-            Propagate();
+            foreach (var player in _TickData.OtherPlayers)
+                foreach (var linePoint in player.Lines)
+                    Radiate(ToElementaryCellPos(linePoint), 10);
+
+            foreach (var bonus in _TickData.Bonuses.Where(b => b.type == BonusType.Nitro || b.type == BonusType.Saw))
+                Radiate(ToElementaryCellPos(bonus.position), 15);
+
+            foreach (var bonus in _TickData.Bonuses.Where(b => b.type == BonusType.Slow))
+            {
+                var pos = ToElementaryCellPos(bonus.position);
+                _Field[pos.X, pos.Y] -= 50;
+            }
 
 #if DEBUG
             WriteFieldDebug();
 #endif
+        }
+
+        private void Radiate(Position pos, int weight)
+        {
+            var processedCells = new HashSet<Position>();
+            var queue = new Queue<(Position pos, int weight)>();
+
+            queue.Enqueue((pos, weight));
+            while (queue.Any())
+            {
+                var pair = queue.Dequeue();
+                SpreadRadiation(queue, processedCells, pair.pos, pair.weight);
+            }
+        }
+
+        private void SpreadRadiation(Queue<(Position pos, int weight)> queue, HashSet<Position> processedCells, Position pos, int weight)
+        {
+            if (!processedCells.Contains(pos) && !queue.Contains((pos, weight)))
+            {
+                processedCells.Add(pos);
+
+                if (pos.X >= 0 &&
+                    pos.Y >= 0 &&
+                    pos.X < _Field.GetLength(0) &&
+                    pos.Y < _Field.GetLength(1) &&
+                    _Field[pos.X, pos.Y] != -101)
+                {
+                    _Field[pos.X, pos.Y] += weight;
+
+                    var change = System.Math.Sign(weight);
+
+                    if (change != 0)
+                    {
+                        queue.Enqueue((pos.Move(Direction.Left, 1), weight - change));
+                        queue.Enqueue((pos.Move(Direction.Up, 1), weight - change));
+                        queue.Enqueue((pos.Move(Direction.Right, 1), weight - change));
+                        queue.Enqueue((pos.Move(Direction.Down, 1), weight - change));
+                    }
+                }
+            }
         }
 
 #if DEBUG
@@ -112,78 +165,42 @@ namespace MiniAICup4Bot
                     f.WriteLine();
                     for (var x = 0; x < _Field.GetLength(0); ++x)
                     {
-                        f.Write($" {_Field[x, y].Value,-3}");
-                        var intensity = _Field[x, y].Value + 100;
+                        f.Write($"{_Field[x, y],-5}");
+                        var intensity = _Field[x, y] + 100;
                     }
                 }
             }
 
             using (var bmp = new System.Drawing.Bitmap(_Field.GetLength(0), _Field.GetLength(1)))
             {
+                var min = 0;
+                var max = 0;
                 for (var y = 0; y < _Field.GetLength(1); ++y)
-                {
                     for (var x = 0; x < _Field.GetLength(0); ++x)
                     {
-                        var intensity = _Field[x, y].Value + 100;
+                        min = System.Math.Min(_Field[x, y], min);
+                        max = System.Math.Max(_Field[x, y], max);
+                    }
+
+                float range = -min + max;
+                for (var y = 0; y < _Field.GetLength(1); ++y)
+                    for (var x = 0; x < _Field.GetLength(0); ++x)
+                    {
+                        var intensity = range == 0 ? 0 : (int)((_Field[x, y] - min) / range * 255);
                         bmp.SetPixel(x, _Field.GetLength(1) - y - 1, System.Drawing.Color.FromArgb(intensity, intensity, intensity));
                     }
-                }
 
                 bmp.Save("after_prop.bmp");
             }
         }
 #endif
 
-        private void Propagate()
-        {
-            var emptyPositions = new List<Position>();
-
-            for (var y = 0; y < _Field.GetLength(1); ++y)
-                for (var x = 0; x < _Field.GetLength(0); ++x)
-                    if (!_Field[x, y].HasValue)
-                        emptyPositions.Add(new Position(x, y));
-
-            var index = 0;
-            while (emptyPositions.Any())
-            {
-                var pos = emptyPositions[index];
-
-                var weights = new List<int?>
-                {
-                    GetWeight(pos, Direction.Left),
-                    GetWeight(pos, Direction.Up),
-                    GetWeight(pos, Direction.Right),
-                    GetWeight(pos, Direction.Down)
-                };
-
-                var filledWeights = weights.Where(w => w.HasValue).ToArray();
-
-                if (filledWeights.Any())
-                {
-                    emptyPositions.Remove(pos);
-                    _Field[pos.X, pos.Y] = (int)System.Math.Round(filledWeights.Select(w => w.Value - System.Math.Sign(w.Value)).Average());
-                }
-
-                index++;
-
-                if (index >= emptyPositions.Count)
-                    index = 0;
-            }
-        }
-
-        private int? GetWeight(Position pos, Direction direction)
-        {
-            var near = pos.Move(direction, 1);
-
-            return near.X >= 0 && near.Y >= 0 && near.X < _Field.GetLength(0) && near.Y < _Field.GetLength(1) ? _Field[near.X, near.Y] : null;
-        }
-
         private int EvaluateDirection(Direction direction, uint dtick)
         {
-            const int noGoEval = -100;
-            const int otherLineEval = 75;
-            const int goodBonusEval = 50;
-            const int badBonusEval = -50;
+            const int noGoEval = int.MinValue;
+
+            if (direction==GetOppositeDirection(_CurrentDirection))
+                return noGoEval;
 
             var newPos = _TickData.ThisPlayer.Position.Move(direction, _Configuration.Speed * dtick);
 
@@ -193,43 +210,31 @@ namespace MiniAICup4Bot
                 newPos.Y >= _Configuration.CellSize * _Configuration.YCellsCount)
                 return noGoEval;
 
-            if (OnPlayerLine(newPos))
-                return noGoEval;
-
-            var eval = _Field[newPos.X / _Configuration.CellSize, newPos.Y / _Configuration.CellSize].Value;
-
-            foreach (var player in _TickData.OtherPlayers)
-                if (player.Lines.Any(lp => lp == newPos))
-                {
-                    eval += otherLineEval;
-                    break;
-                }
-
-            var bonusesAtNewPos = _TickData.Bonuses.Where(b => b.position == newPos).ToArray();
-            if (bonusesAtNewPos.Any())
-                if (bonusesAtNewPos.Any(b => b.type == BonusType.Nitro || b.type == BonusType.Saw))
-                    eval += goodBonusEval;
-                else
-                    eval -= badBonusEval;
-
-            return eval;
+            return GetField(ToElementaryCellPos(newPos));
         }
 
-        private bool OnPlayerLine(Position newPos)
+        private Direction GetOppositeDirection(Direction direction)
         {
-            foreach (var linePoint in _TickData.ThisPlayer.Lines)
-                if (linePoint == newPos)
-                    return true;
-
-            return false;
+            switch (direction)
+            {
+                case Direction.Left: return Direction.Right;
+                case Direction.Up: return Direction.Down;
+                case Direction.Right: return Direction.Left;
+                case Direction.Down: return Direction.Up;
+                default: throw new System.ArgumentOutOfRangeException(nameof(direction));
+            }
         }
 
         private void DiscardField()
         {
             for (var y = 0; y < _Field.GetLength(1); ++y)
                 for (var x = 0; x < _Field.GetLength(0); ++x)
-                    _Field[x, y] = null;
+                    _Field[x, y] = 0;
         }
+
+        private int GetField(Position pos) => _Field[pos.X, pos.Y];
+        private void SetField(Position pos, int value) => _Field[pos.X, pos.Y] = value;
+        private Position ToElementaryCellPos(Position pos) => new Position((int)(pos.X / _Configuration.CellSize), (int)(pos.Y / _Configuration.CellSize));
     }
 
     internal class GameConfiguration
@@ -398,13 +403,7 @@ namespace MiniAICup4Bot
         public override bool Equals(object obj) => Equals(obj as Position);
         public bool Equals(Position other) => other != null && X == other.X && Y == other.Y;
 
-        public override int GetHashCode()
-        {
-            var hashCode = 1861411795;
-            hashCode = hashCode * -1521134295 + X.GetHashCode();
-            hashCode = hashCode * -1521134295 + Y.GetHashCode();
-            return hashCode;
-        }
+        public override int GetHashCode() => X.GetHashCode() ^ Y.GetHashCode();
 
         public override string ToString() => $"{{{X}; {Y}}}";
 
