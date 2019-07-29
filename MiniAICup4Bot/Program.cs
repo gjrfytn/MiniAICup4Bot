@@ -44,183 +44,231 @@ namespace MiniAICup4Bot
 
     internal class Bot
     {
-        private const int _SelfCrossingWeight = -666;
-
         private readonly GameConfiguration _Configuration;
-        private readonly int[,] _Field;
 
         private TickData _TickData;
         private Direction _CurrentDirection;
         private int _PreviousTickNum = -6;
+        private IEnumerable<Direction> _AvailableDirections;
+        private Position _PlayerPos;
+        private string _DebugMessage;
+        private (Position pos, uint distance)? _ClosestTerritory;
+
+#if DEBUG
+        private readonly System.IO.StreamWriter logStream = System.IO.File.CreateText("debug.log");
+#endif
+
+        private (Position pos, uint distance) ClosestTerritory
+        {
+            get
+            {
+                if (!_ClosestTerritory.HasValue)
+                {
+                    Position closestTerritory = null;
+                    var distanceToTerritory = uint.MaxValue;
+                    foreach (var territoryPoint in _TickData.ThisPlayer.Territory.Select(t => ToElementaryCellPos(t)))
+                    {
+                        var dist = Distance(_PlayerPos, territoryPoint);
+                        if (dist < distanceToTerritory)
+                        {
+                            closestTerritory = territoryPoint;
+                            distanceToTerritory = dist;
+                        }
+                    }
+
+                    _ClosestTerritory = (closestTerritory, distanceToTerritory);
+                }
+
+                return _ClosestTerritory.Value;
+            }
+        }
 
         public Bot(GameConfiguration configuration)
         {
             _Configuration = configuration;
-
-            _Field = new int[_Configuration.XCellsCount, _Configuration.YCellsCount];
         }
 
         public Action MakeTurn(TickData tickData)
         {
             _TickData = tickData;
 
+            _ClosestTerritory = null;
+
             var dtick = (uint)(tickData.TickNum - _PreviousTickNum);
             _PreviousTickNum = (int)tickData.TickNum;
 
-            var evaluations = new Dictionary<Direction, int>();
+            _AvailableDirections = GetAvailableDirections(_TickData.ThisPlayer.Position,_CurrentDirection,dtick);
+            _PlayerPos = ToElementaryCellPos(_TickData.ThisPlayer.Position);
 
-            WeightField();
-
-            foreach (var direction in System.Enum.GetValues(typeof(Direction)).Cast<Direction>())
-                evaluations[direction] = EvaluateDirection(direction, dtick);
-
-            var directionToGo = evaluations.OrderByDescending(e => e.Value).First().Key;
+            var directionToGo = GetDirection();
 
             _CurrentDirection = directionToGo;
 
-            return new Action(directionToGo, "test");
+            return new Action(directionToGo, _DebugMessage);
         }
 
-        private void WeightField()
+        private IEnumerable<Direction> GetAvailableDirections(Position pos, Direction currentDirection, uint dtick)
         {
-            DiscardField();
-
-            foreach (var linePoint in _TickData.ThisPlayer.Lines)
-                SetField(ToElementaryCellPos(linePoint), _SelfCrossingWeight); //TODO
-
-            var cornerRadiation = -15;
-            Radiate(new Position(0,0), cornerRadiation);
-            Radiate(new Position(0,(int)_Configuration.YCellsCount), cornerRadiation);
-            Radiate(new Position((int)_Configuration.XCellsCount, (int)_Configuration.YCellsCount), cornerRadiation);
-            Radiate(new Position((int)_Configuration.XCellsCount, 0), cornerRadiation);
-
-            var playerPos = ToElementaryCellPos(_TickData.ThisPlayer.Position);
-            var thisLineLength = _TickData.ThisPlayer.Lines.Count();
-            var distanceToTerritory = _TickData.ThisPlayer.Territory.Select(t => ToElementaryCellPos(t))
-                                                                    .Min(t => System.Math.Abs(playerPos.X - t.X) + System.Math.Abs(playerPos.Y - t.Y));
-
-            foreach (var territoryPoint in _TickData.ThisPlayer.Territory)
-                Radiate(ToElementaryCellPos(territoryPoint), thisLineLength + distanceToTerritory - 5);
-
-            foreach (var player in _TickData.OtherPlayers)
-                foreach (var territoryPoint in player.Territory)
-                    Radiate(ToElementaryCellPos(territoryPoint), 2);
-
-            foreach (var player in _TickData.OtherPlayers)
-                Radiate(ToElementaryCellPos(player.Position), -25);
-
-            foreach (var player in _TickData.OtherPlayers)
-                foreach (var linePoint in player.Lines)
-                    Radiate(ToElementaryCellPos(linePoint), 5);
-
-            foreach (var bonus in _TickData.Bonuses.Where(b => b.type == BonusType.Nitro || b.type == BonusType.Saw))
-                Radiate(ToElementaryCellPos(bonus.position), 25);
-
-            foreach (var bonus in _TickData.Bonuses.Where(b => b.type == BonusType.Slow))
+            var possibleDirections = new List<Direction>();
+            foreach (var direction in System.Enum.GetValues(typeof(Direction)).Cast<Direction>())
             {
-                var pos = ToElementaryCellPos(bonus.position);
-                _Field[pos.X, pos.Y] -= 50;
+                var newPos = pos.Move(direction, _Configuration.Speed * dtick);
+
+                if (direction == GetOppositeDirection(currentDirection))
+                    continue;
+
+                if (newPos.X < 0 ||
+                    newPos.Y < 0 ||
+                    newPos.X >= _Configuration.CellSize * _Configuration.XCellsCount ||
+                    newPos.Y >= _Configuration.CellSize * _Configuration.YCellsCount)
+                    continue;
+
+                if (_TickData.ThisPlayer.Lines.Any(lp => lp == newPos))
+                    continue;
+
+                possibleDirections.Add(direction);
             }
 
+            //TODO Bad bonus avoidance.
+
+            return possibleDirections;
+        }
+
+        private Direction GetDirection()
+        {
+            Log($"Deciding where to go, I have this possibilities: {string.Join(", ", _AvailableDirections)}.");
+
+            if (!_AvailableDirections.Any())
+            {
+                Log("I DONT KNOW WHAT TO DO!");
+
+                return Direction.Left;
+            }
+
+            var direction = Flee();
+
+            if (direction.HasValue)
+            {
+                Log("Fleeing!");
+
+                return direction.Value;
+            }
+
+            direction = Attack();
+
+            if (direction.HasValue)
+            {
+                Log("Attacking!");
+
+                return direction.Value;
+            }
+
+            direction = PickUpBonus();
+
+            if (direction.HasValue)
+            {
+                Log("Going for bonus.");
+
+                return direction.Value;
+            }
+
+            direction = CaptureTerritory();
+
+            if (direction.HasValue)
+            {
+                Log("Capturing territory.");
+
+                return direction.Value;
+            }
+
+            Log("I DONT KNOW WHAT TO DO!");
+
+            return _AvailableDirections.First();
+        }
+
+        private Direction? CaptureTerritory()
+        {
+            var lineLength = _TickData.ThisPlayer.Lines.Count();
+            if (lineLength <= 6)
+            {
+                var mirroredPos = new Position(2 * _PlayerPos.X - ClosestTerritory.pos.X, 2 * _PlayerPos.Y - ClosestTerritory.pos.Y);
+
+                return GoTo(mirroredPos);
+            }
+            else
+            {
+                return GoTo(ClosestTerritory.pos);
+            }
+        }
+
+        private Direction? Attack()
+        {
+            const int attackRange = 3;
+
+            foreach (var player in _TickData.OtherPlayers)
+                foreach (var linePoint in player.Lines.Select(lp => ToElementaryCellPos(lp)))
+                    if (Distance(_PlayerPos, linePoint) <= attackRange)
+                        return GoTo(linePoint);
+
+            return null;
+        }
+
+        private Direction? PickUpBonus()
+        {
+            const int pickUpRange = 3;
+
+            foreach (var bonus in _TickData.Bonuses.Where(b => b.type == BonusType.Nitro || b.type == BonusType.Saw).Select(b => ToElementaryCellPos(b.position)))
+                if (Distance(_PlayerPos, bonus) <= pickUpRange)
+                    return GoTo(bonus);
+
+            return null;
+        }
+
+        private void Log(string message)
+        {
+            _DebugMessage = message;
 #if DEBUG
-            WriteFieldDebug();
+            logStream.WriteLine(message);
+            logStream.Flush();
 #endif
         }
 
-        private void Radiate(Position pos, int weight)
+        private Direction? Flee()
         {
-            var processedCells = new HashSet<Position>();
-            var queue = new Queue<(Position pos, int weight)>();
+            const int reassuranceDist = 3;
 
-            queue.Enqueue((pos, weight));
-            while (queue.Any())
+            if (ClosestTerritory.distance != 0)
             {
-                var pair = queue.Dequeue();
-                SpreadRadiation(queue, processedCells, pair.pos, pair.weight);
-            }
-        }
-
-        private void SpreadRadiation(Queue<(Position pos, int weight)> queue, HashSet<Position> processedCells, Position pos, int weight)
-        {
-            if (!processedCells.Contains(pos) && !queue.Contains((pos, weight)))
-            {
-                processedCells.Add(pos);
-
-                if (pos.X >= 0 &&
-                    pos.Y >= 0 &&
-                    pos.X < _Field.GetLength(0) &&
-                    pos.Y < _Field.GetLength(1) &&
-                    _Field[pos.X, pos.Y] != _SelfCrossingWeight)
-                {
-                    _Field[pos.X, pos.Y] += weight;
-
-                    var change = System.Math.Sign(weight);
-
-                    if (change != 0)
-                    {
-                        queue.Enqueue((pos.Move(Direction.Left, 1), weight - change));
-                        queue.Enqueue((pos.Move(Direction.Up, 1), weight - change));
-                        queue.Enqueue((pos.Move(Direction.Right, 1), weight - change));
-                        queue.Enqueue((pos.Move(Direction.Down, 1), weight - change));
-                    }
-                }
-            }
-        }
-
-#if DEBUG
-        private void WriteFieldDebug()
-        {
-            using (var f = System.IO.File.CreateText("after_prop.txt"))
-            {
-                for (var y = _Field.GetLength(1) - 1; y >= 0; --y)
-                {
-                    f.WriteLine();
-                    for (var x = 0; x < _Field.GetLength(0); ++x)
-                        f.Write($"{_Field[x, y],-5}");
-                }
+                foreach (var linePoint in _TickData.ThisPlayer.Lines.Select(lp => ToElementaryCellPos(lp)))
+                    foreach (var player in _TickData.OtherPlayers)
+                        if (Distance(linePoint, ToElementaryCellPos(player.Position)) <= (int)ClosestTerritory.distance - reassuranceDist)
+                            return GoTo(ClosestTerritory.pos);
             }
 
-            using (var bmp = new System.Drawing.Bitmap(_Field.GetLength(0), _Field.GetLength(1)))
-            {
-                var min = 0;
-                var max = 0;
-                for (var y = 0; y < _Field.GetLength(1); ++y)
-                    for (var x = 0; x < _Field.GetLength(0); ++x)
-                    {
-                        min = System.Math.Min(_Field[x, y], min);
-                        max = System.Math.Max(_Field[x, y], max);
-                    }
-
-                float range = -min + max;
-                for (var y = 0; y < _Field.GetLength(1); ++y)
-                    for (var x = 0; x < _Field.GetLength(0); ++x)
-                    {
-                        var intensity = range == 0 ? 0 : (int)((_Field[x, y] - min) / range * 255);
-                        bmp.SetPixel(x, _Field.GetLength(1) - y - 1, System.Drawing.Color.FromArgb(intensity, intensity, intensity));
-                    }
-
-                bmp.Save("after_prop.bmp");
-            }
+            return null;
         }
-#endif
 
-        private int EvaluateDirection(Direction direction, uint dtick)
+        private Direction GoTo(Position pos)
         {
-            const int noGoEval = int.MinValue;
+            var xdiff = _PlayerPos.X - pos.X;
+            var ydiff = _PlayerPos.Y - pos.Y;
 
-            if (direction == GetOppositeDirection(_CurrentDirection))
-                return noGoEval;
+            if (xdiff < 0 && _AvailableDirections.Contains(Direction.Right))
+                return Direction.Right;
 
-            var newPos = _TickData.ThisPlayer.Position.Move(direction, _Configuration.Speed * dtick);
+            if (xdiff > 0 && _AvailableDirections.Contains(Direction.Left))
+                return Direction.Left;
 
-            if (newPos.X < 0 ||
-                newPos.Y < 0 ||
-                newPos.X >= _Configuration.CellSize * _Configuration.XCellsCount ||
-                newPos.Y >= _Configuration.CellSize * _Configuration.YCellsCount)
-                return noGoEval;
+            if (ydiff < 0 && _AvailableDirections.Contains(Direction.Up))
+                return Direction.Up;
 
-            return GetField(ToElementaryCellPos(newPos));
+            if (ydiff > 0 && _AvailableDirections.Contains(Direction.Down))
+                return Direction.Down;
+
+            return _AvailableDirections.First();
         }
+
+        private uint Distance(Position p1, Position p2) => (uint)(System.Math.Abs(p1.X - p2.X) + System.Math.Abs(p1.Y - p2.Y));
 
         private Direction GetOppositeDirection(Direction direction)
         {
@@ -234,16 +282,8 @@ namespace MiniAICup4Bot
             }
         }
 
-        private void DiscardField()
-        {
-            for (var y = 0; y < _Field.GetLength(1); ++y)
-                for (var x = 0; x < _Field.GetLength(0); ++x)
-                    _Field[x, y] = 0;
-        }
-
-        private int GetField(Position pos) => _Field[pos.X, pos.Y];
-        private void SetField(Position pos, int value) => _Field[pos.X, pos.Y] = value;
         private Position ToElementaryCellPos(Position pos) => new Position((int)(pos.X / _Configuration.CellSize), (int)(pos.Y / _Configuration.CellSize));
+        private Position ToFractionedCellPos(Position pos) => new Position((int)(_Configuration.CellSize* pos.X), (int)(_Configuration.CellSize*pos.Y ));
     }
 
     internal class GameConfiguration
