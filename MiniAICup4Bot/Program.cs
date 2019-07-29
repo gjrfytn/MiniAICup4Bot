@@ -53,9 +53,10 @@ namespace MiniAICup4Bot
         private Position _PlayerPos;
         private string _DebugMessage;
         private (Position pos, uint distance)? _ClosestTerritory;
+        private (Position pos, uint distance)? _FurthestTerritory;
 
 #if DEBUG
-        private readonly System.IO.StreamWriter logStream = System.IO.File.CreateText("debug.log");
+        private readonly System.IO.StreamWriter _LogStream = System.IO.File.CreateText("debug.log");
 #endif
 
         private (Position pos, uint distance) ClosestTerritory
@@ -83,6 +84,31 @@ namespace MiniAICup4Bot
             }
         }
 
+        private (Position pos, uint distance) FurthestTerritory
+        {
+            get
+            {
+                if (!_FurthestTerritory.HasValue)
+                {
+                    Position furthestTerritory = null;
+                    var distanceToTerritory = uint.MinValue;
+                    foreach (var territoryPoint in _TickData.ThisPlayer.Territory.Select(t => ToElementaryCellPos(t)))
+                    {
+                        var dist = Distance(_PlayerPos, territoryPoint);
+                        if (dist > distanceToTerritory)
+                        {
+                            furthestTerritory = territoryPoint;
+                            distanceToTerritory = dist;
+                        }
+                    }
+
+                    _FurthestTerritory = (furthestTerritory, distanceToTerritory);
+                }
+
+                return _FurthestTerritory.Value;
+            }
+        }
+
         public Bot(GameConfiguration configuration)
         {
             _Configuration = configuration;
@@ -97,7 +123,7 @@ namespace MiniAICup4Bot
             var dtick = (uint)(tickData.TickNum - _PreviousTickNum);
             _PreviousTickNum = (int)tickData.TickNum;
 
-            _AvailableDirections = GetAvailableDirections(_TickData.ThisPlayer.Position,_CurrentDirection,dtick);
+            _AvailableDirections = GetAvailableDirections(_TickData.ThisPlayer.Position, _CurrentDirection, dtick);
             _PlayerPos = ToElementaryCellPos(_TickData.ThisPlayer.Position);
 
             var directionToGo = GetDirection();
@@ -114,7 +140,7 @@ namespace MiniAICup4Bot
             {
                 var newPos = pos.Move(direction, _Configuration.Speed * dtick);
 
-                if (direction == GetOppositeDirection(currentDirection))
+                if (direction == OppositeDirection(currentDirection))
                     continue;
 
                 if (newPos.X < 0 ||
@@ -189,15 +215,18 @@ namespace MiniAICup4Bot
         private Direction? CaptureTerritory()
         {
             var lineLength = _TickData.ThisPlayer.Lines.Count();
-            if (lineLength <= 6)
+            if (lineLength <= 10)
             {
                 var mirroredPos = new Position(2 * _PlayerPos.X - ClosestTerritory.pos.X, 2 * _PlayerPos.Y - ClosestTerritory.pos.Y);
+
+                if (mirroredPos == _PlayerPos)
+                    return GoTo(_TickData.OtherPlayers.First().Territory.First());
 
                 return GoTo(mirroredPos);
             }
             else
             {
-                return GoTo(ClosestTerritory.pos);
+                return GoTo(FurthestTerritory.pos);
             }
         }
 
@@ -228,8 +257,8 @@ namespace MiniAICup4Bot
         {
             _DebugMessage = message;
 #if DEBUG
-            logStream.WriteLine(message);
-            logStream.Flush();
+            _LogStream.WriteLine(message);
+            _LogStream.Flush();
 #endif
         }
 
@@ -238,39 +267,64 @@ namespace MiniAICup4Bot
             const int reassuranceDist = 3;
 
             if (ClosestTerritory.distance != 0)
-            {
                 foreach (var linePoint in _TickData.ThisPlayer.Lines.Select(lp => ToElementaryCellPos(lp)))
                     foreach (var player in _TickData.OtherPlayers)
-                        if (Distance(linePoint, ToElementaryCellPos(player.Position)) <= (int)ClosestTerritory.distance - reassuranceDist)
+                        if (Distance(linePoint, ToElementaryCellPos(player.Position)) <= ClosestTerritory.distance + reassuranceDist)
                             return GoTo(ClosestTerritory.pos);
-            }
 
             return null;
         }
 
         private Direction GoTo(Position pos)
         {
-            var xdiff = _PlayerPos.X - pos.X;
-            var ydiff = _PlayerPos.Y - pos.Y;
+            var processedCells = new Dictionary<Position, Direction/*float weight*/>();
+            var queue = new Queue<Position>();//new SortedSet<(Position pos,/* Direction direction,*/ /*float weight*/)>(new PathfindingComparer());
 
-            if (xdiff < 0 && _AvailableDirections.Contains(Direction.Right))
-                return Direction.Right;
+            processedCells.Add(_PlayerPos, _CurrentDirection);
+            queue.Enqueue(_PlayerPos);//Add((_PlayerPos, /*_CurrentDirection,*/0));
+            while (queue.Any())
+            {
+                var node = queue.Dequeue();
+                if (Spread(queue, processedCells, node, pos))
+                {
+                    var current = pos;
+                    var path = new List<Position>();
+                    while (current != _PlayerPos)
+                    {
+                        path.Add(current);
+                        current = current.Move(OppositeDirection(processedCells[current]));
+                    }
 
-            if (xdiff > 0 && _AvailableDirections.Contains(Direction.Left))
-                return Direction.Left;
-
-            if (ydiff < 0 && _AvailableDirections.Contains(Direction.Up))
-                return Direction.Up;
-
-            if (ydiff > 0 && _AvailableDirections.Contains(Direction.Down))
-                return Direction.Down;
+                    return processedCells[path.Last()];
+                }
+            }
 
             return _AvailableDirections.First();
         }
 
+        private bool Spread(Queue<Position> queue, Dictionary<Position, Direction> processedCells, Position pos, Position target)
+        {
+            var cameFrom = processedCells[pos];
+
+            if (pos == target)
+                return true;
+
+            foreach (var direction in GetAvailableDirections(ToFractionedCellPos(pos), cameFrom, 6)) //TODO
+            {
+                var newPos = pos.Move(direction);
+                if (!processedCells.ContainsKey(newPos))
+                {
+                    processedCells.Add(newPos, direction);
+                    queue.Enqueue(newPos);
+                }
+            }
+
+            return false;
+        }
+
         private uint Distance(Position p1, Position p2) => (uint)(System.Math.Abs(p1.X - p2.X) + System.Math.Abs(p1.Y - p2.Y));
 
-        private Direction GetOppositeDirection(Direction direction)
+        private Direction OppositeDirection(Direction direction)
         {
             switch (direction)
             {
@@ -283,7 +337,7 @@ namespace MiniAICup4Bot
         }
 
         private Position ToElementaryCellPos(Position pos) => new Position((int)(pos.X / _Configuration.CellSize), (int)(pos.Y / _Configuration.CellSize));
-        private Position ToFractionedCellPos(Position pos) => new Position((int)(_Configuration.CellSize* pos.X), (int)(_Configuration.CellSize*pos.Y ));
+        private Position ToFractionedCellPos(Position pos) => new Position((int)(_Configuration.CellSize * pos.X), (int)(_Configuration.CellSize * pos.Y));
     }
 
     internal class GameConfiguration
@@ -449,6 +503,8 @@ namespace MiniAICup4Bot
             }
         }
 
+        public Position Move(Direction direction) => Move(direction, 1);
+
         public override bool Equals(object obj) => Equals(obj as Position);
         public bool Equals(Position other) => other != null && X == other.X && Y == other.Y;
 
@@ -465,5 +521,10 @@ namespace MiniAICup4Bot
         {
             return !(left == right);
         }
+    }
+
+    internal class PathfindingComparer : IComparer<(Position pos, Direction dir, float length)>
+    {
+        public int Compare((Position pos, Direction dir, float length) x, (Position pos, Direction dir, float length) y) => System.Math.Sign(x.length - y.length);
     }
 }
