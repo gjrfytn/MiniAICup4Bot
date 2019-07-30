@@ -171,25 +171,33 @@ namespace MiniAICup4Bot
                 return Direction.Left;
             }
 
-            var direction = Flee();
+            var menace = FindMenacingPlayer();
+            var target = FindVulnerablePlayer();
 
-            if (direction.HasValue)
+            if (menace.HasValue)
             {
+                if (target.HasValue &&
+                    menace.Value.player == target.Value.player &&
+                    menace.Value.distance > target.Value.distance)
+                {
+                    Log("Attacking menace!");
+
+                    return GoTo(target.Value.linePoint);
+                }
+
                 Log("Fleeing!");
 
-                return direction.Value;
+                return Flee();
             }
 
-            direction = Attack();
-
-            if (direction.HasValue)
+            if (target.HasValue)
             {
                 Log("Attacking!");
 
-                return direction.Value;
+                return GoTo(target.Value.linePoint);
             }
 
-            direction = PickUpBonus();
+            var direction = PickUpBonus();
 
             if (direction.HasValue)
             {
@@ -220,7 +228,14 @@ namespace MiniAICup4Bot
                 var mirroredPos = new Position(2 * _PlayerPos.X - ClosestTerritory.pos.X, 2 * _PlayerPos.Y - ClosestTerritory.pos.Y);
 
                 if (mirroredPos == _PlayerPos)
-                    return GoTo(_TickData.OtherPlayers.First().Territory.First());
+                {
+                    if (_TickData.OtherPlayers.Any())
+                        return GoTo(ToElementaryCellPos(_TickData.OtherPlayers.First().Territory.First()));
+
+                    var rand = new System.Random();
+
+                    return GoTo(new Position(rand.Next((int)_Configuration.XCellsCount), rand.Next((int)_Configuration.YCellsCount)));
+                }
 
                 return GoTo(mirroredPos);
             }
@@ -230,14 +245,17 @@ namespace MiniAICup4Bot
             }
         }
 
-        private Direction? Attack()
+        private (PlayerState player, Position linePoint, uint distance)? FindVulnerablePlayer()
         {
             const int attackRange = 3;
 
             foreach (var player in _TickData.OtherPlayers)
                 foreach (var linePoint in player.Lines.Select(lp => ToElementaryCellPos(lp)))
-                    if (Distance(_PlayerPos, linePoint) <= attackRange)
-                        return GoTo(linePoint);
+                {
+                    var dist = Distance(_PlayerPos, linePoint);
+                    if (dist <= attackRange)
+                        return (player, linePoint, dist);
+                }
 
             return null;
         }
@@ -262,26 +280,31 @@ namespace MiniAICup4Bot
 #endif
         }
 
-        private Direction? Flee()
+        private Direction Flee() => GoTo(ClosestTerritory.pos);
+
+        private (PlayerState player, uint distance)? FindMenacingPlayer()
         {
-            const int reassuranceDist = 3;
+            const int reassuranceDist = 4;
 
             if (ClosestTerritory.distance != 0)
                 foreach (var linePoint in _TickData.ThisPlayer.Lines.Select(lp => ToElementaryCellPos(lp)))
                     foreach (var player in _TickData.OtherPlayers)
-                        if (Distance(linePoint, ToElementaryCellPos(player.Position)) <= ClosestTerritory.distance + reassuranceDist)
-                            return GoTo(ClosestTerritory.pos);
+                    {
+                        var dist = Distance(linePoint, ToElementaryCellPos(player.Position));
+                        if (dist <= ClosestTerritory.distance + reassuranceDist)
+                            return (player, dist);
+                    }
 
             return null;
         }
 
         private Direction GoTo(Position pos)
         {
-            var processedCells = new Dictionary<Position, Direction/*float weight*/>();
-            var queue = new Queue<Position>();//new SortedSet<(Position pos,/* Direction direction,*/ /*float weight*/)>(new PathfindingComparer());
+            var processedCells = new Dictionary<Position, Direction>();
+            var queue = new Queue<Position>();
 
             processedCells.Add(_PlayerPos, _CurrentDirection);
-            queue.Enqueue(_PlayerPos);//Add((_PlayerPos, /*_CurrentDirection,*/0));
+            queue.Enqueue(_PlayerPos);
             while (queue.Any())
             {
                 var node = queue.Dequeue();
@@ -337,7 +360,7 @@ namespace MiniAICup4Bot
         }
 
         private Position ToElementaryCellPos(Position pos) => new Position((int)(pos.X / _Configuration.CellSize), (int)(pos.Y / _Configuration.CellSize));
-        private Position ToFractionedCellPos(Position pos) => new Position((int)(_Configuration.CellSize * pos.X), (int)(_Configuration.CellSize * pos.Y));
+        private Position ToFractionedCellPos(Position pos) => new Position((int)(_Configuration.CellSize * pos.X + _Configuration.CellSize / 2), (int)(_Configuration.CellSize * pos.Y + _Configuration.CellSize / 2));
     }
 
     internal class GameConfiguration
