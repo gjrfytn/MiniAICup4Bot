@@ -301,14 +301,18 @@ namespace MiniAICup4Bot
         private Direction GoTo(Position pos)
         {
             var processedCells = new Dictionary<Position, Direction>();
-            var queue = new Queue<Position>();
+            var costs = new Dictionary<Position, float>();
+            var queue = new List<(Position pos, float cost)>();
 
-            processedCells.Add(_PlayerPos, _CurrentDirection);
-            queue.Enqueue(_PlayerPos);
+            processedCells[_PlayerPos] = _CurrentDirection;
+            costs[_PlayerPos] = 0;
+            queue.Add((_PlayerPos, 0));
             while (queue.Any())
             {
-                var node = queue.Dequeue();
-                if (Spread(queue, processedCells, node, pos))
+                queue.Sort(new PathfindingComparer());
+                var node = queue.First();
+                queue.Remove(node);
+                if (Spread(queue, processedCells, costs, node, pos))
                 {
                     var current = pos;
                     var path = new List<Position>();
@@ -325,20 +329,22 @@ namespace MiniAICup4Bot
             return _AvailableDirections.First();
         }
 
-        private bool Spread(Queue<Position> queue, Dictionary<Position, Direction> processedCells, Position pos, Position target)
+        private bool Spread(List<(Position pos, float cost)> queue, Dictionary<Position, Direction> processedCells, Dictionary<Position, float> costs, (Position pos, float cost) node, Position target)
         {
-            var cameFrom = processedCells[pos];
+            var cameFrom = processedCells[node.pos];
 
-            if (pos == target)
+            if (node.pos == target)
                 return true;
 
-            foreach (var direction in GetAvailableDirections(ToFractionedCellPos(pos), cameFrom, 6)) //TODO
+            foreach (var direction in GetAvailableDirections(ToFractionedCellPos(node.pos), cameFrom, 6)) //TODO
             {
-                var newPos = pos.Move(direction);
-                if (!processedCells.ContainsKey(newPos))
+                var newPos = node.pos.Move(direction);
+                var newCost = node.cost + (processedCells[node.pos] == direction ? 0.99f : 1);
+                if (!processedCells.ContainsKey(newPos) || newCost < costs[newPos])
                 {
-                    processedCells.Add(newPos, direction);
-                    queue.Enqueue(newPos);
+                    processedCells[newPos] = direction;
+                    costs[newPos] = newCost;
+                    queue.Add((newPos, newCost));
                 }
             }
 
@@ -546,8 +552,8 @@ namespace MiniAICup4Bot
         }
     }
 
-    internal class PathfindingComparer : IComparer<(Position pos, Direction dir, float length)>
+    internal class PathfindingComparer : IComparer<(Position pos, float cost)>
     {
-        public int Compare((Position pos, Direction dir, float length) x, (Position pos, Direction dir, float length) y) => System.Math.Sign(x.length - y.length);
+        public int Compare((Position pos, float cost) x, (Position pos, float cost) y) => System.Math.Sign(x.cost - y.cost);
     }
 }
