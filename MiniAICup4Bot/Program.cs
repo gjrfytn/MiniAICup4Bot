@@ -130,6 +130,10 @@ namespace MiniAICup4Bot
 
             _CurrentDirection = directionToGo;
 
+#if DEBUG
+            Log(directionToGo.ToString());
+#endif
+
             return new Action(directionToGo, _DebugMessage);
         }
 
@@ -151,6 +155,10 @@ namespace MiniAICup4Bot
 
                 if (_TickData.ThisPlayer.Lines.Any(lp => lp == newPos))
                     continue;
+
+                var linesCount = _TickData.ThisPlayer.Lines.Count();
+                if (_TickData.OtherPlayers.Any(p=>p.Position == newPos && p.Lines.Count()<= linesCount))
+                        continue;
 
                 possibleDirections.Add(direction);
             }
@@ -225,9 +233,7 @@ namespace MiniAICup4Bot
             var lineLength = _TickData.ThisPlayer.Lines.Count();
             if (lineLength <= 10)
             {
-                var mirroredPos = new Position(2 * _PlayerPos.X - ClosestTerritory.pos.X, 2 * _PlayerPos.Y - ClosestTerritory.pos.Y);
-
-                if (mirroredPos == _PlayerPos)
+                if (!_TickData.ThisPlayer.Lines.Any())
                 {
                     if (_TickData.OtherPlayers.Any())
                     {
@@ -250,6 +256,8 @@ namespace MiniAICup4Bot
                     return GoTo(new Position(rand.Next((int)_Configuration.XCellsCount), rand.Next((int)_Configuration.YCellsCount)));
                 }
 
+                var mirroredPos = new Position(2 * _PlayerPos.X - ClosestTerritory.pos.X, 2 * _PlayerPos.Y - ClosestTerritory.pos.Y);
+
                 return GoTo(mirroredPos);
             }
             else
@@ -261,12 +269,22 @@ namespace MiniAICup4Bot
             const int attackRange = 3;
 
             foreach (var player in _TickData.OtherPlayers)
+            {
+                var enemyPos = ToElementaryCellPos(player.Position);
+                var enemyDistanceToTerritory = player.Territory.Min(t => Distance(enemyPos, ToElementaryCellPos(t)));
+
                 foreach (var linePoint in player.Lines.Select(lp => ToElementaryCellPos(lp)))
                 {
                     var dist = Distance(_PlayerPos, linePoint);
                     if (dist <= attackRange)
+                    {
+                        if (enemyDistanceToTerritory <= 1 && Distance(linePoint, enemyPos) <= 2)
+                            continue;
+
                         return (player, linePoint, dist);
+                    }
                 }
+            }
 
             return null;
         }
