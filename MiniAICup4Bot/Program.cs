@@ -350,13 +350,21 @@ namespace MiniAICup4Bot
                 {
                     var current = pos;
                     var path = new List<Position>();
+                    var watchdog = 0;
                     while (current != _PlayerPos)
                     {
                         path.Add(current);
                         current = current.Move(OppositeDirection(processedCells[current]));
+
+                        watchdog++;
+                        if (watchdog > 500)
+                            break;
                     }
 
-                    return processedCells[path.Last()];
+                    if(path.Any())
+                        return processedCells[path.Last()];
+
+                    break;
                 }
             }
 
