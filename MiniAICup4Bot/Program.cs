@@ -157,8 +157,8 @@ namespace MiniAICup4Bot
                     continue;
 
                 var linesCount = _TickData.ThisPlayer.Lines.Count();
-                if (_TickData.OtherPlayers.Any(p=>p.Position == newPos && p.Lines.Count()<= linesCount))
-                        continue;
+                if (_TickData.OtherPlayers.Any(p => p.Position == newPos && p.Lines.Count() <= linesCount))
+                    continue;
 
                 possibleDirections.Add(direction);
             }
@@ -271,19 +271,24 @@ namespace MiniAICup4Bot
             foreach (var player in _TickData.OtherPlayers)
             {
                 var enemyPos = ToElementaryCellPos(player.Position);
-                var enemyDistanceToTerritory = player.Territory.Min(t => Distance(enemyPos, ToElementaryCellPos(t)));
+                var enemyDistanceToHisTerritory = player.Territory.Min(t => Distance(enemyPos, ToElementaryCellPos(t)));
 
+                Position targetLinePoint = null;
+                var minDistance = uint.MaxValue;
                 foreach (var linePoint in player.Lines.Select(lp => ToElementaryCellPos(lp)))
                 {
                     var dist = Distance(_PlayerPos, linePoint);
-                    if (dist <= attackRange)
-                    {
-                        if (enemyDistanceToTerritory <= 1 && Distance(linePoint, enemyPos) <= 2)
-                            continue;
 
-                        return (player, linePoint, dist);
+                    if (dist < minDistance)
+                    {
+                        minDistance = dist;
+                        if (dist <= attackRange)
+                            targetLinePoint = linePoint;
                     }
                 }
+
+                if (targetLinePoint != null && (enemyDistanceToHisTerritory > 1 || Distance(targetLinePoint, enemyPos) > 2))
+                    return (player, targetLinePoint, minDistance);
             }
 
             return null;
