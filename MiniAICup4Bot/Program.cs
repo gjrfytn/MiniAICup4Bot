@@ -230,7 +230,20 @@ namespace MiniAICup4Bot
                 if (mirroredPos == _PlayerPos)
                 {
                     if (_TickData.OtherPlayers.Any())
-                        return GoTo(ToElementaryCellPos(_TickData.OtherPlayers.First().Territory.First()));
+                    {
+                        var direction = GoTo(ToElementaryCellPos(_TickData.OtherPlayers.First().Territory.First()));
+                        var newPos = _PlayerPos.Move(direction);
+                        var territory = _TickData.ThisPlayer.Territory.Select(t => ToElementaryCellPos(t)).ToArray();
+
+                        if (!territory.Any(t => t == newPos) && _TickData.OtherPlayers.Min(p => Distance(ToElementaryCellPos(p.Position), newPos)) <= 2)
+                        {
+                            var neighbourTerritory = territory.FirstOrDefault(t => Distance(_PlayerPos, t) == 1);
+                            if (neighbourTerritory != null)
+                                return GoTo(neighbourTerritory);
+                        }
+
+                        return direction;
+                    }
 
                     var rand = new System.Random();
 
@@ -240,9 +253,7 @@ namespace MiniAICup4Bot
                 return GoTo(mirroredPos);
             }
             else
-            {
                 return GoTo(FurthestTerritory.pos);
-            }
         }
 
         private (PlayerState player, Position linePoint, uint distance)? FindVulnerablePlayer()
