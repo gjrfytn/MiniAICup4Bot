@@ -48,7 +48,6 @@ namespace MiniAICup4Bot
 
         private TickData _TickData;
         private Direction _CurrentDirection;
-        private int _PreviousTickNum = -6;
         private IEnumerable<Direction> _AvailableDirections;
         private Position _PlayerPos;
         private string _DebugMessage;
@@ -120,10 +119,7 @@ namespace MiniAICup4Bot
 
             _ClosestTerritory = null;
 
-            var dtick = (uint)(tickData.TickNum - _PreviousTickNum);
-            _PreviousTickNum = (int)tickData.TickNum;
-
-            _AvailableDirections = GetAvailableDirections(_TickData.ThisPlayer.Position, _CurrentDirection, dtick);
+            _AvailableDirections = GetAvailableDirections(ToElementaryCellPos(_TickData.ThisPlayer.Position), _CurrentDirection);
             _PlayerPos = ToElementaryCellPos(_TickData.ThisPlayer.Position);
 
             var directionToGo = GetDirection();
@@ -137,27 +133,27 @@ namespace MiniAICup4Bot
             return new Action(directionToGo, _DebugMessage);
         }
 
-        private IEnumerable<Direction> GetAvailableDirections(Position pos, Direction currentDirection, uint dtick)
+        private IEnumerable<Direction> GetAvailableDirections(Position pos, Direction currentDirection)
         {
             var possibleDirections = new List<Direction>();
             foreach (var direction in System.Enum.GetValues(typeof(Direction)).Cast<Direction>())
             {
-                var newPos = pos.Move(direction, _Configuration.Speed * dtick);
+                var newPos = pos.Move(direction);
 
                 if (direction == OppositeDirection(currentDirection))
                     continue;
 
                 if (newPos.X < 0 ||
                     newPos.Y < 0 ||
-                    newPos.X >= _Configuration.CellSize * _Configuration.XCellsCount ||
-                    newPos.Y >= _Configuration.CellSize * _Configuration.YCellsCount)
+                    newPos.X >= _Configuration.XCellsCount ||
+                    newPos.Y >= _Configuration.YCellsCount)
                     continue;
 
-                if (_TickData.ThisPlayer.Lines.Any(lp => lp == newPos))
+                if (_TickData.ThisPlayer.Lines.Any(lp => ToElementaryCellPos(lp) == newPos))
                     continue;
 
                 var linesCount = _TickData.ThisPlayer.Lines.Count();
-                if (_TickData.OtherPlayers.Any(p => p.Position == newPos && p.Lines.Count() <= linesCount))
+                if (_TickData.OtherPlayers.Any(p => ToElementaryCellPos(p.Position) == newPos && p.Lines.Count() <= linesCount))
                     continue;
 
                 possibleDirections.Add(direction);
@@ -361,7 +357,7 @@ namespace MiniAICup4Bot
                             break;
                     }
 
-                    if(path.Any())
+                    if (path.Any())
                         return processedCells[path.Last()];
 
                     break;
@@ -378,7 +374,7 @@ namespace MiniAICup4Bot
             if (node.pos == target)
                 return true;
 
-            foreach (var direction in GetAvailableDirections(ToFractionedCellPos(node.pos), cameFrom, 6)) //TODO
+            foreach (var direction in GetAvailableDirections(node.pos, cameFrom))
             {
                 var newPos = node.pos.Move(direction);
                 var newCost = node.cost + (processedCells[node.pos] == direction ? 0.99f : 1);
@@ -407,8 +403,7 @@ namespace MiniAICup4Bot
             }
         }
 
-        private Position ToElementaryCellPos(Position pos) => new Position((int)(pos.X / _Configuration.CellSize), (int)(pos.Y / _Configuration.CellSize));
-        private Position ToFractionedCellPos(Position pos) => new Position((int)(_Configuration.CellSize * pos.X + _Configuration.CellSize / 2), (int)(_Configuration.CellSize * pos.Y + _Configuration.CellSize / 2));
+        private Position ToElementaryCellPos(BasicPosition pos) => new Position((int)(pos.X / _Configuration.CellSize), (int)(pos.Y / _Configuration.CellSize));
     }
 
     internal class GameConfiguration
@@ -446,10 +441,10 @@ namespace MiniAICup4Bot
     internal class TickData
     {
         private readonly Dictionary<string, PlayerState> _Players = new Dictionary<string, PlayerState>();
-        private readonly List<(BonusType type, Position position)> _Bonuses = new List<(BonusType, Position)>();
+        private readonly List<(BonusType type, BasicPosition position)> _Bonuses = new List<(BonusType, BasicPosition)>();
 
         public IReadOnlyDictionary<string, PlayerState> Players => _Players;
-        public IEnumerable<(BonusType type, Position position)> Bonuses => _Bonuses;
+        public IEnumerable<(BonusType type, BasicPosition position)> Bonuses => _Bonuses;
         public uint TickNum { get; }
 
         public TickData(string tickString)
@@ -463,7 +458,7 @@ namespace MiniAICup4Bot
             {
                 var coords = bonusElement.Elements("position").ToArray();
                 _Bonuses.Add((Program.ParseBonusType(bonusElement.Element("type").Value),
-                              new Position(int.Parse(coords[0].Value), int.Parse(coords[1].Value))));
+                              new BasicPosition(int.Parse(coords[0].Value), int.Parse(coords[1].Value))));
             }
 
             TickNum = uint.Parse(root.Element("tick_num").Value);
@@ -476,13 +471,13 @@ namespace MiniAICup4Bot
     internal class PlayerState
     {
         private readonly List<(BonusType type, uint ticks)> _Bonuses = new List<(BonusType, uint)>();
-        private readonly List<Position> _Territory = new List<Position>();
-        private readonly List<Position> _Lines = new List<Position>();
+        private readonly List<BasicPosition> _Territory = new List<BasicPosition>();
+        private readonly List<BasicPosition> _Lines = new List<BasicPosition>();
 
         public uint Score { get; }
-        public IEnumerable<Position> Territory => _Territory;
-        public Position Position { get; }
-        public IEnumerable<Position> Lines => _Lines;
+        public IEnumerable<BasicPosition> Territory => _Territory;
+        public BasicPosition Position { get; }
+        public IEnumerable<BasicPosition> Lines => _Lines;
         public Direction? Direction { get; }
         public IEnumerable<(BonusType type, uint ticks)> Bonuses => _Bonuses;
 
@@ -493,16 +488,16 @@ namespace MiniAICup4Bot
             foreach (var territoryElement in element.Elements("territory"))
             {
                 var coords = territoryElement.Elements().ToArray();
-                _Territory.Add(new Position(int.Parse(coords[0].Value), int.Parse(coords[1].Value)));
+                _Territory.Add(new BasicPosition(int.Parse(coords[0].Value), int.Parse(coords[1].Value)));
             }
 
             var posCoords = element.Elements("position").ToArray();
-            Position = new Position(int.Parse(posCoords[0].Value), int.Parse(posCoords[1].Value));
+            Position = new BasicPosition(int.Parse(posCoords[0].Value), int.Parse(posCoords[1].Value));
 
             foreach (var lineElement in element.Elements("lines"))
             {
                 var coords = lineElement.Elements().ToArray();
-                _Lines.Add(new Position(int.Parse(coords[0].Value), int.Parse(coords[1].Value)));
+                _Lines.Add(new BasicPosition(int.Parse(coords[0].Value), int.Parse(coords[1].Value)));
             }
 
             Direction = ParseDirection(element.Element("direction").Value);
@@ -551,30 +546,33 @@ namespace MiniAICup4Bot
         }
     }
 
-    internal class Position : System.IEquatable<Position>
+    internal class BasicPosition
     {
         public int X { get; }
         public int Y { get; }
 
-        public Position(int x, int y)
+        public BasicPosition(int x, int y)
         {
             X = x;
             Y = y;
         }
+    }
 
-        public Position Move(Direction direction, uint speed)
+    internal class Position : BasicPosition, System.IEquatable<Position>
+    {
+        public Position(int x, int y) : base(x, y) { }
+
+        public Position Move(Direction direction)
         {
             switch (direction)
             {
-                case Direction.Left: return new Position((int)(X - speed), Y);
-                case Direction.Up: return new Position(X, (int)(Y + speed));
-                case Direction.Right: return new Position((int)(X + speed), Y);
-                case Direction.Down: return new Position(X, (int)(Y - speed));
+                case Direction.Left: return new Position(X - 1, Y);
+                case Direction.Up: return new Position(X, Y + 1);
+                case Direction.Right: return new Position(X + 1, Y);
+                case Direction.Down: return new Position(X, Y - 1);
                 default: throw new System.ArgumentOutOfRangeException(nameof(direction));
             }
         }
-
-        public Position Move(Direction direction) => Move(direction, 1);
 
         public override bool Equals(object obj) => Equals(obj as Position);
         public bool Equals(Position other) => other != null && X == other.X && Y == other.Y;
@@ -583,15 +581,9 @@ namespace MiniAICup4Bot
 
         public override string ToString() => $"{{{X}; {Y}}}";
 
-        public static bool operator ==(Position left, Position right)
-        {
-            return EqualityComparer<Position>.Default.Equals(left, right);
-        }
+        public static bool operator ==(Position left, Position right) => EqualityComparer<Position>.Default.Equals(left, right);
 
-        public static bool operator !=(Position left, Position right)
-        {
-            return !(left == right);
-        }
+        public static bool operator !=(Position left, Position right) => !(left == right);
     }
 
     internal class PathfindingComparer : IComparer<(Position pos, float cost)>
