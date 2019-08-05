@@ -47,16 +47,19 @@ namespace MiniAICup4Bot
         private readonly GameConfiguration _Configuration;
 
         private TickData _TickData;
-        private Direction _CurrentDirection;
         private IEnumerable<Direction> _AvailableDirections;
         private Position _PlayerPos;
         private string _DebugMessage;
         private (Position pos, uint distance)? _ClosestTerritory;
         private (Position pos, uint distance)? _FurthestTerritory;
+        private Helper _Helper;
+        private Navigator _Navigator;
 
 #if DEBUG
         private readonly System.IO.StreamWriter _LogStream = System.IO.File.CreateText("debug.log");
 #endif
+
+        private Direction CurrentDirection => _TickData.ThisPlayer.Direction ?? Direction.Left;
 
         private (Position pos, uint distance) ClosestTerritory
         {
@@ -66,9 +69,9 @@ namespace MiniAICup4Bot
                 {
                     Position closestTerritory = null;
                     var distanceToTerritory = uint.MaxValue;
-                    foreach (var territoryPoint in _TickData.ThisPlayer.Territory.Select(t => ToElementaryCellPos(t)))
+                    foreach (var territoryPoint in _TickData.ThisPlayer.Territory.Select(t => _Helper.ToElementaryCellPos(t)))
                     {
-                        var dist = Distance(_PlayerPos, territoryPoint);
+                        var dist = Helper.Distance(_PlayerPos, territoryPoint);
                         if (dist < distanceToTerritory)
                         {
                             closestTerritory = territoryPoint;
@@ -91,9 +94,9 @@ namespace MiniAICup4Bot
                 {
                     Position furthestTerritory = null;
                     var distanceToTerritory = uint.MinValue;
-                    foreach (var territoryPoint in _TickData.ThisPlayer.Territory.Select(t => ToElementaryCellPos(t)))
+                    foreach (var territoryPoint in _TickData.ThisPlayer.Territory.Select(t => _Helper.ToElementaryCellPos(t)))
                     {
-                        var dist = Distance(_PlayerPos, territoryPoint);
+                        var dist = Helper.Distance(_PlayerPos, territoryPoint);
                         if (dist > distanceToTerritory)
                         {
                             furthestTerritory = territoryPoint;
@@ -117,51 +120,22 @@ namespace MiniAICup4Bot
         {
             _TickData = tickData;
 
+            _Helper = new Helper(_Configuration, _TickData);
+
             _ClosestTerritory = null;
 
-            _AvailableDirections = GetAvailableDirections(ToElementaryCellPos(_TickData.ThisPlayer.Position), _CurrentDirection);
-            _PlayerPos = ToElementaryCellPos(_TickData.ThisPlayer.Position);
+            _AvailableDirections = _Helper.GetAvailableDirections(_Helper.ToElementaryCellPos(_TickData.ThisPlayer.Position), CurrentDirection);
+            _PlayerPos = _Helper.ToElementaryCellPos(_TickData.ThisPlayer.Position);
+
+            _Navigator = new Navigator(_Helper, _PlayerPos, CurrentDirection);
 
             var directionToGo = GetDirection();
-
-            _CurrentDirection = directionToGo;
 
 #if DEBUG
             Log(directionToGo.ToString());
 #endif
 
             return new Action(directionToGo, _DebugMessage);
-        }
-
-        private IEnumerable<Direction> GetAvailableDirections(Position pos, Direction currentDirection)
-        {
-            var possibleDirections = new List<Direction>();
-            foreach (var direction in System.Enum.GetValues(typeof(Direction)).Cast<Direction>())
-            {
-                var newPos = pos.Move(direction);
-
-                if (direction == OppositeDirection(currentDirection))
-                    continue;
-
-                if (newPos.X < 0 ||
-                    newPos.Y < 0 ||
-                    newPos.X >= _Configuration.XCellsCount ||
-                    newPos.Y >= _Configuration.YCellsCount)
-                    continue;
-
-                if (_TickData.ThisPlayer.Lines.Any(lp => ToElementaryCellPos(lp) == newPos))
-                    continue;
-
-                var linesCount = _TickData.ThisPlayer.Lines.Count();
-                if (_TickData.OtherPlayers.Any(p => ToElementaryCellPos(p.Position) == newPos && p.Lines.Count() <= linesCount))
-                    continue;
-
-                possibleDirections.Add(direction);
-            }
-
-            //TODO Bad bonus avoidance.
-
-            return possibleDirections;
         }
 
         private Direction GetDirection()
@@ -233,13 +207,13 @@ namespace MiniAICup4Bot
                 {
                     if (_TickData.OtherPlayers.Any())
                     {
-                        var direction = GoTo(ToElementaryCellPos(_TickData.OtherPlayers.First().Territory.First()));
+                        var direction = GoTo(_Helper.ToElementaryCellPos(_TickData.OtherPlayers.First().Territory.First()));
                         var newPos = _PlayerPos.Move(direction);
-                        var territory = _TickData.ThisPlayer.Territory.Select(t => ToElementaryCellPos(t)).ToArray();
+                        var territory = _TickData.ThisPlayer.Territory.Select(t => _Helper.ToElementaryCellPos(t)).ToArray();
 
-                        if (!territory.Any(t => t == newPos) && _TickData.OtherPlayers.Min(p => Distance(ToElementaryCellPos(p.Position), newPos)) <= 2)
+                        if (!territory.Any(t => t == newPos) && _TickData.OtherPlayers.Min(p => Helper.Distance(_Helper.ToElementaryCellPos(p.Position), newPos)) <= 2)
                         {
-                            var neighbourTerritory = territory.FirstOrDefault(t => Distance(_PlayerPos, t) == 1);
+                            var neighbourTerritory = territory.FirstOrDefault(t => Helper.Distance(_PlayerPos, t) == 1);
                             if (neighbourTerritory != null)
                                 return GoTo(neighbourTerritory);
                         }
@@ -266,14 +240,14 @@ namespace MiniAICup4Bot
 
             foreach (var player in _TickData.OtherPlayers)
             {
-                var enemyPos = ToElementaryCellPos(player.Position);
-                var enemyDistanceToHisTerritory = player.Territory.Min(t => Distance(enemyPos, ToElementaryCellPos(t)));
+                var enemyPos = _Helper.ToElementaryCellPos(player.Position);
+                var enemyDistanceToHisTerritory = player.Territory.Min(t => Helper.Distance(enemyPos, _Helper.ToElementaryCellPos(t)));
 
                 Position targetLinePoint = null;
                 var minDistance = uint.MaxValue;
-                foreach (var linePoint in player.Lines.Select(lp => ToElementaryCellPos(lp)))
+                foreach (var linePoint in player.Lines.Select(lp => _Helper.ToElementaryCellPos(lp)))
                 {
-                    var dist = Distance(_PlayerPos, linePoint);
+                    var dist = Helper.Distance(_PlayerPos, linePoint);
 
                     if (dist < minDistance)
                     {
@@ -283,7 +257,7 @@ namespace MiniAICup4Bot
                     }
                 }
 
-                if (targetLinePoint != null && (enemyDistanceToHisTerritory > 1 || Distance(targetLinePoint, enemyPos) > 2))
+                if (targetLinePoint != null && (enemyDistanceToHisTerritory > 1 || Helper.Distance(targetLinePoint, enemyPos) > 2))
                     return (player, targetLinePoint, minDistance);
             }
 
@@ -294,8 +268,8 @@ namespace MiniAICup4Bot
         {
             const int pickUpRange = 3;
 
-            foreach (var bonus in _TickData.Bonuses.Where(b => b.type == BonusType.Nitro || b.type == BonusType.Saw).Select(b => ToElementaryCellPos(b.position)))
-                if (Distance(_PlayerPos, bonus) <= pickUpRange)
+            foreach (var bonus in _TickData.Bonuses.Where(b => b.type == BonusType.Nitro || b.type == BonusType.Saw).Select(b => _Helper.ToElementaryCellPos(b.position)))
+                if (Helper.Distance(_PlayerPos, bonus) <= pickUpRange)
                     return GoTo(bonus);
 
             return null;
@@ -317,10 +291,10 @@ namespace MiniAICup4Bot
             const int reassuranceDist = 4;
 
             if (ClosestTerritory.distance != 0)
-                foreach (var linePoint in _TickData.ThisPlayer.Lines.Select(lp => ToElementaryCellPos(lp)))
+                foreach (var linePoint in _TickData.ThisPlayer.Lines.Select(lp => _Helper.ToElementaryCellPos(lp)))
                     foreach (var player in _TickData.OtherPlayers)
                     {
-                        var dist = Distance(linePoint, ToElementaryCellPos(player.Position));
+                        var dist = Helper.Distance(linePoint, _Helper.ToElementaryCellPos(player.Position));
                         if (dist <= ClosestTerritory.distance + reassuranceDist)
                             return (player, dist);
                     }
@@ -328,82 +302,7 @@ namespace MiniAICup4Bot
             return null;
         }
 
-        private Direction GoTo(Position pos)
-        {
-            var processedCells = new Dictionary<Position, Direction>();
-            var costs = new Dictionary<Position, float>();
-            var queue = new List<(Position pos, float cost)>();
-
-            processedCells[_PlayerPos] = _CurrentDirection;
-            costs[_PlayerPos] = 0;
-            queue.Add((_PlayerPos, 0));
-            while (queue.Any())
-            {
-                queue.Sort(new PathfindingComparer());
-                var node = queue.First();
-                queue.Remove(node);
-                if (Spread(queue, processedCells, costs, node, pos))
-                {
-                    var current = pos;
-                    var path = new List<Position>();
-                    var watchdog = 0;
-                    while (current != _PlayerPos)
-                    {
-                        path.Add(current);
-                        current = current.Move(OppositeDirection(processedCells[current]));
-
-                        watchdog++;
-                        if (watchdog > 500)
-                            break;
-                    }
-
-                    if (path.Any())
-                        return processedCells[path.Last()];
-
-                    break;
-                }
-            }
-
-            return _AvailableDirections.First();
-        }
-
-        private bool Spread(List<(Position pos, float cost)> queue, Dictionary<Position, Direction> processedCells, Dictionary<Position, float> costs, (Position pos, float cost) node, Position target)
-        {
-            var cameFrom = processedCells[node.pos];
-
-            if (node.pos == target)
-                return true;
-
-            foreach (var direction in GetAvailableDirections(node.pos, cameFrom))
-            {
-                var newPos = node.pos.Move(direction);
-                var newCost = node.cost + (processedCells[node.pos] == direction ? 0.99f : 1);
-                if (!processedCells.ContainsKey(newPos) || newCost < costs[newPos])
-                {
-                    processedCells[newPos] = direction;
-                    costs[newPos] = newCost;
-                    queue.Add((newPos, newCost));
-                }
-            }
-
-            return false;
-        }
-
-        private uint Distance(Position p1, Position p2) => (uint)(System.Math.Abs(p1.X - p2.X) + System.Math.Abs(p1.Y - p2.Y));
-
-        private Direction OppositeDirection(Direction direction)
-        {
-            switch (direction)
-            {
-                case Direction.Left: return Direction.Right;
-                case Direction.Up: return Direction.Down;
-                case Direction.Right: return Direction.Left;
-                case Direction.Down: return Direction.Up;
-                default: throw new System.ArgumentOutOfRangeException(nameof(direction));
-            }
-        }
-
-        private Position ToElementaryCellPos(BasicPosition pos) => new Position((int)(pos.X / _Configuration.CellSize), (int)(pos.Y / _Configuration.CellSize));
+        private Direction GoTo(Position pos) => _Navigator.GoTo(pos) ?? _AvailableDirections.First();
     }
 
     internal class GameConfiguration
@@ -589,5 +488,137 @@ namespace MiniAICup4Bot
     internal class PathfindingComparer : IComparer<(Position pos, float cost)>
     {
         public int Compare((Position pos, float cost) x, (Position pos, float cost) y) => System.Math.Sign(x.cost - y.cost);
+    }
+
+    internal class Helper
+    {
+        private readonly GameConfiguration _Configuration;
+        private readonly TickData _TickData;
+
+        public Helper(GameConfiguration configuration, TickData tickData)
+        {
+            _Configuration = configuration;
+            _TickData = tickData;
+        }
+
+        public Position ToElementaryCellPos(BasicPosition pos) => new Position((int)(pos.X / _Configuration.CellSize), (int)(pos.Y / _Configuration.CellSize));
+
+        public IEnumerable<Direction> GetAvailableDirections(Position pos, Direction currentDirection)
+        {
+            var availableDirections = new List<Direction>();
+            foreach (var direction in System.Enum.GetValues(typeof(Direction)).Cast<Direction>())
+            {
+                var newPos = pos.Move(direction);
+
+                if (direction == OppositeDirection(currentDirection))
+                    continue;
+
+                if (newPos.X < 0 ||
+                    newPos.Y < 0 ||
+                    newPos.X >= _Configuration.XCellsCount ||
+                    newPos.Y >= _Configuration.YCellsCount)
+                    continue;
+
+                if (_TickData.ThisPlayer.Lines.Any(lp => ToElementaryCellPos(lp) == newPos))
+                    continue;
+
+                var linesCount = _TickData.ThisPlayer.Lines.Count();
+                if (_TickData.OtherPlayers.Any(p => ToElementaryCellPos(p.Position) == newPos && p.Lines.Count() <= linesCount))
+                    continue;
+
+                availableDirections.Add(direction);
+            }
+
+            return availableDirections;
+        }
+
+        public static Direction OppositeDirection(Direction direction)
+        {
+            switch (direction)
+            {
+                case Direction.Left: return Direction.Right;
+                case Direction.Up: return Direction.Down;
+                case Direction.Right: return Direction.Left;
+                case Direction.Down: return Direction.Up;
+                default: throw new System.ArgumentOutOfRangeException(nameof(direction));
+            }
+        }
+
+        public static uint Distance(Position p1, Position p2) => (uint)(System.Math.Abs(p1.X - p2.X) + System.Math.Abs(p1.Y - p2.Y));
+    }
+
+    internal class Navigator
+    {
+        private readonly Helper _Helper;
+        private readonly Position _InitialPos;
+        private readonly Direction _CurrentDirection;
+
+        public Navigator(Helper helper, Position initialPos, Direction currentDirection)
+        {
+            _Helper = helper;
+            _InitialPos = initialPos;
+            _CurrentDirection = currentDirection;
+        }
+
+        public Direction? GoTo(Position pos)
+        {
+            var processedCells = new Dictionary<Position, Direction>();
+            var costs = new Dictionary<Position, float>();
+            var queue = new List<(Position pos, float cost)>();
+
+            processedCells[_InitialPos] = _CurrentDirection;
+            costs[_InitialPos] = 0;
+            queue.Add((_InitialPos, 0));
+            while (queue.Any())
+            {
+                queue.Sort(new PathfindingComparer());
+                var node = queue.First();
+                queue.Remove(node);
+                if (Spread(queue, processedCells, costs, node, pos))
+                {
+                    var current = pos;
+                    var path = new List<Position>();
+                    var watchdog = 0;
+                    while (current != _InitialPos)
+                    {
+                        path.Add(current);
+                        current = current.Move(Helper.OppositeDirection(processedCells[current]));
+
+                        watchdog++;
+                        if (watchdog > 500)
+                            break;
+                    }
+
+                    if (path.Any())
+                        return processedCells[path.Last()];
+
+                    break;
+                }
+            }
+
+            return null;
+        }
+
+        private bool Spread(List<(Position pos, float cost)> queue, Dictionary<Position, Direction> processedCells, Dictionary<Position, float> costs, (Position pos, float cost) node, Position target)
+        {
+            var cameFrom = processedCells[node.pos];
+
+            if (node.pos == target)
+                return true;
+
+            foreach (var direction in _Helper.GetAvailableDirections(node.pos, cameFrom))
+            {
+                var newPos = node.pos.Move(direction);
+                var newCost = node.cost + (processedCells[node.pos] == direction ? 0.99f : 1);
+                if (!processedCells.ContainsKey(newPos) || newCost < costs[newPos])
+                {
+                    processedCells[newPos] = direction;
+                    costs[newPos] = newCost;
+                    queue.Add((newPos, newCost));
+                }
+            }
+
+            return false;
+        }
     }
 }
