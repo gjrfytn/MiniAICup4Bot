@@ -123,6 +123,7 @@ namespace MiniAICup4Bot
             _Helper = new Helper(_Configuration, _TickData);
 
             _ClosestTerritory = null;
+            _FurthestTerritory = null;
 
             _AvailableDirections = _Helper.GetAvailableDirections(_Helper.ToElementaryCellPos(_TickData.ThisPlayer.Position), CurrentDirection);
             _PlayerPos = _Helper.ToElementaryCellPos(_TickData.ThisPlayer.Position);
