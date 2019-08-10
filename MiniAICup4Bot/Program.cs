@@ -212,7 +212,7 @@ namespace MiniAICup4Bot
                         var newPos = _PlayerPos.Move(direction);
                         var territory = _TickData.ThisPlayer.Territory.Select(t => _Helper.ToElementaryCellPos(t)).ToArray();
 
-                        if (!territory.Any(t => t == newPos) && _TickData.OtherPlayers.Min(p => Helper.Distance(_Helper.ToElementaryCellPos(p.Position), newPos)) <= 2)
+                        if (!territory.Any(t => t == newPos) && _TickData.OtherPlayers.Min(p => Helper.Distance(_Helper.ToElementaryCellPos(p.Position), newPos)) <= 3)
                         {
                             var neighbourTerritory = territory.FirstOrDefault(t => Helper.Distance(_PlayerPos, t) == 1);
                             if (neighbourTerritory != null)
@@ -231,6 +231,8 @@ namespace MiniAICup4Bot
 
                 return GoTo(mirroredPos);
             }
+            else if (ClosestTerritory.distance == 1)
+                return GoTo(ClosestTerritory.pos);
             else
                 return GoTo(FurthestTerritory.pos);
         }
@@ -290,15 +292,23 @@ namespace MiniAICup4Bot
         private (PlayerState player, uint distance)? FindMenacingPlayer()
         {
             const int reassuranceDist = 4;
+            var fleeDist = ClosestTerritory.distance + reassuranceDist;
 
             if (ClosestTerritory.distance != 0)
-                foreach (var linePoint in _TickData.ThisPlayer.Lines.Select(lp => _Helper.ToElementaryCellPos(lp)))
-                    foreach (var player in _TickData.OtherPlayers)
+                foreach (var player in _TickData.OtherPlayers)
+                {
+                    var playerPos = _Helper.ToElementaryCellPos(player.Position);
+                    var distToClosestTerr = Helper.Distance(ClosestTerritory.pos, playerPos);
+                    if (distToClosestTerr <= fleeDist)
+                        return (player, distToClosestTerr);
+
+                    foreach (var linePoint in _TickData.ThisPlayer.Lines.Select(lp => _Helper.ToElementaryCellPos(lp)))
                     {
-                        var dist = Helper.Distance(linePoint, _Helper.ToElementaryCellPos(player.Position));
-                        if (dist <= ClosestTerritory.distance + reassuranceDist)
-                            return (player, dist);
+                        var distToLine = Helper.Distance(linePoint, playerPos);
+                        if (distToLine <= fleeDist)
+                            return (player, distToLine);
                     }
+                }
 
             return null;
         }
