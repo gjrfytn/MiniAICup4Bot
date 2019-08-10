@@ -8,9 +8,9 @@ namespace MiniAICup4Bot
     {
         private static void Main()
         {
-#if DEBUG
+            #if DEBUG
             System.Threading.Thread.Sleep(3000);
-#endif
+            #endif
 
             var configuration = new GameConfiguration(System.Console.ReadLine());
 
@@ -44,14 +44,18 @@ namespace MiniAICup4Bot
 
     internal class Bot
     {
+        private const int _PredictorDistance = 4;
+
         private readonly GameConfiguration _Configuration;
 
         private TickData _TickData;
         private IEnumerable<Direction> _AvailableDirections;
+        private IEnumerable<Direction> _SafeDirections;
         private Position _PlayerPos;
         private string _DebugMessage;
         private (Position pos, uint distance)? _ClosestTerritory;
         private (Position pos, uint distance)? _FurthestTerritory;
+        private GameState _GameState;
         private Helper _Helper;
         private Navigator _Navigator;
 
@@ -111,6 +115,29 @@ namespace MiniAICup4Bot
             }
         }
 
+        private GameState GameState
+        {
+            get
+            {
+                if (_GameState == null)
+                {
+                    var players = _TickData.Players.Where(p => p.Value == _TickData.ThisPlayer ||
+                                                               Helper.Distance(_Helper.ToElementaryCellPos(_TickData.ThisPlayer.Position), _Helper.ToElementaryCellPos(p.Value.Position)) <= _PredictorDistance ||
+                                                               _TickData.ThisPlayer.Lines.Any(lp => Helper.Distance(_Helper.ToElementaryCellPos(lp), _Helper.ToElementaryCellPos(p.Value.Position)) <= _PredictorDistance))
+                                                   .Select(p => new Player(p.Key,
+                                                                           _Helper.ToElementaryCellPos(p.Value.Position),
+                                                                           p.Value.Direction ?? Direction.Left,//TODO
+                                                                           p.Value.Territory.Select(t => _Helper.ToElementaryCellPos(t)),
+                                                                           p.Value.Lines.Select(lp => _Helper.ToElementaryCellPos(lp)),
+                                                                           p.Value == _TickData.ThisPlayer));
+
+                    _GameState = new GameState(_Configuration, players);
+                }
+
+                return _GameState;
+            }
+        }
+
         public Bot(GameConfiguration configuration)
         {
             _Configuration = configuration;
@@ -120,14 +147,18 @@ namespace MiniAICup4Bot
         {
             _TickData = tickData;
 
-            _Helper = new Helper(_Configuration, _TickData);
+            _Helper = new Helper(_Configuration);
 
+            _GameState = null;
             _ClosestTerritory = null;
+            _FurthestTerritory = null;
 
-            _AvailableDirections = _Helper.GetAvailableDirections(_Helper.ToElementaryCellPos(_TickData.ThisPlayer.Position), CurrentDirection);
+            _AvailableDirections = _Helper.GetAvailableDirections(_Helper.ToElementaryCellPos(_TickData.ThisPlayer.Position),
+                                                                  CurrentDirection,
+                                                                  _TickData.ThisPlayer.Lines.Select(lp => _Helper.ToElementaryCellPos(lp)));
             _PlayerPos = _Helper.ToElementaryCellPos(_TickData.ThisPlayer.Position);
 
-            _Navigator = new Navigator(_Helper, _PlayerPos, CurrentDirection);
+            _Navigator = new Navigator(_TickData, _Helper, _PlayerPos, CurrentDirection);
 
             var directionToGo = GetDirection();
 
@@ -149,33 +180,26 @@ namespace MiniAICup4Bot
                 return Direction.Left;
             }
 
-            var menace = FindMenacingPlayer();
-            var target = FindVulnerablePlayer();
+            FindSafeDirections();
 
-            if (menace.HasValue)
+            var direction = Flee();
+            if (direction.HasValue)
             {
-                if (target.HasValue &&
-                    menace.Value.player == target.Value.player &&
-                    menace.Value.distance > target.Value.distance)
-                {
-                    Log("Attacking menace!");
-
-                    return GoTo(target.Value.linePoint);
-                }
-
                 Log("Fleeing!");
 
-                return Flee();
+                return direction.Value;
             }
 
-            if (target.HasValue)
+            direction = Attack();
+
+            if (direction.HasValue)
             {
                 Log("Attacking!");
 
-                return GoTo(target.Value.linePoint);
+                return direction.Value;
             }
 
-            var direction = PickUpBonus();
+            direction = PickUpBonus();
 
             if (direction.HasValue)
             {
@@ -234,7 +258,7 @@ namespace MiniAICup4Bot
                 return GoTo(FurthestTerritory.pos);
         }
 
-        private (PlayerState player, Position linePoint, uint distance)? FindVulnerablePlayer()
+        private Direction? Attack()
         {
             const int attackRange = 3;
 
@@ -257,8 +281,8 @@ namespace MiniAICup4Bot
                     }
                 }
 
-                if (targetLinePoint != null && (enemyDistanceToHisTerritory > 1 || Helper.Distance(targetLinePoint, enemyPos) > 2))
-                    return (player, targetLinePoint, minDistance);
+                if (targetLinePoint != null)
+                    return GoTo(targetLinePoint);
             }
 
             return null;
@@ -284,22 +308,40 @@ namespace MiniAICup4Bot
 #endif
         }
 
-        private Direction Flee() => GoTo(ClosestTerritory.pos);
-
-        private (PlayerState player, uint distance)? FindMenacingPlayer()
+        private Direction? Flee()
         {
+            if (!_SafeDirections.Any())
+                return GoTo(ClosestTerritory.pos);
+
+            if (_SafeDirections.Count() == 1)
+                return _SafeDirections.Single();
+
             const int reassuranceDist = 4;
 
-            if (ClosestTerritory.distance != 0)
+            if (ClosestTerritory.distance >= 2)
                 foreach (var linePoint in _TickData.ThisPlayer.Lines.Select(lp => _Helper.ToElementaryCellPos(lp)))
                     foreach (var player in _TickData.OtherPlayers)
                     {
                         var dist = Helper.Distance(linePoint, _Helper.ToElementaryCellPos(player.Position));
                         if (dist <= ClosestTerritory.distance + reassuranceDist)
-                            return (player, dist);
+                        {
+                            var direction = GoTo(ClosestTerritory.pos);
+
+                            if (!_SafeDirections.Contains(direction))
+                                return _SafeDirections.First(); //TODO
+
+                            return direction;
+                        }
                     }
 
             return null;
+        }
+
+        private void FindSafeDirections()
+        {
+            var dangerousDirections = GameState.Players.Count() > 1 ? Predictor.GetDeathDirections(GameState, _PredictorDistance) : Enumerable.Empty<Direction>(); //TODO 4?
+
+            _SafeDirections = _AvailableDirections.Except(dangerousDirections);
         }
 
         private Direction GoTo(Position pos) => _Navigator.GoTo(pos) ?? _AvailableDirections.First();
@@ -493,17 +535,15 @@ namespace MiniAICup4Bot
     internal class Helper
     {
         private readonly GameConfiguration _Configuration;
-        private readonly TickData _TickData;
 
-        public Helper(GameConfiguration configuration, TickData tickData)
+        public Helper(GameConfiguration configuration)
         {
             _Configuration = configuration;
-            _TickData = tickData;
         }
 
         public Position ToElementaryCellPos(BasicPosition pos) => new Position((int)(pos.X / _Configuration.CellSize), (int)(pos.Y / _Configuration.CellSize));
 
-        public IEnumerable<Direction> GetAvailableDirections(Position pos, Direction currentDirection)
+        public IEnumerable<Direction> GetAvailableDirections(Position pos, Direction currentDirection, IEnumerable<Position> playerLinePoints)
         {
             var availableDirections = new List<Direction>();
             foreach (var direction in System.Enum.GetValues(typeof(Direction)).Cast<Direction>())
@@ -519,11 +559,7 @@ namespace MiniAICup4Bot
                     newPos.Y >= _Configuration.YCellsCount)
                     continue;
 
-                if (_TickData.ThisPlayer.Lines.Any(lp => ToElementaryCellPos(lp) == newPos))
-                    continue;
-
-                var linesCount = _TickData.ThisPlayer.Lines.Count();
-                if (_TickData.OtherPlayers.Any(p => ToElementaryCellPos(p.Position) == newPos && p.Lines.Count() <= linesCount))
+                if (playerLinePoints.Any(lp => lp == newPos))
                     continue;
 
                 availableDirections.Add(direction);
@@ -549,12 +585,14 @@ namespace MiniAICup4Bot
 
     internal class Navigator
     {
+        private readonly TickData _TickData;
         private readonly Helper _Helper;
         private readonly Position _InitialPos;
         private readonly Direction _CurrentDirection;
 
-        public Navigator(Helper helper, Position initialPos, Direction currentDirection)
+        public Navigator(TickData tickData, Helper helper, Position initialPos, Direction currentDirection)
         {
+            _TickData = tickData;
             _Helper = helper;
             _InitialPos = initialPos;
             _CurrentDirection = currentDirection;
@@ -606,7 +644,7 @@ namespace MiniAICup4Bot
             if (node.pos == target)
                 return true;
 
-            foreach (var direction in _Helper.GetAvailableDirections(node.pos, cameFrom))
+            foreach (var direction in _Helper.GetAvailableDirections(node.pos, cameFrom, _TickData.ThisPlayer.Lines.Select(lp => _Helper.ToElementaryCellPos(lp))))
             {
                 var newPos = node.pos.Move(direction);
                 var newCost = node.cost + (processedCells[node.pos] == direction ? 0.99f : 1);
@@ -619,6 +657,223 @@ namespace MiniAICup4Bot
             }
 
             return false;
+        }
+    }
+
+    internal static class Predictor
+    {
+        public static IEnumerable<Direction> GetDeathDirections(GameState gameState, uint depth)
+        {
+            if (depth == 0)
+                return Enumerable.Empty<Direction>();
+
+            var childStates = gameState.GetChildStates();
+
+            var deathDirections = childStates.GroupBy(s => s.playerMove)
+                                             .Where(g => g.Any(s => s.state.PlayerIsDead))
+                                             .Select(g => g.Key.Value)
+                                             .ToList();
+
+            foreach (var childState in childStates.Where(s => !s.state.PlayerIsDead))
+                if (IsDeadInAllChildStates(childState.state, depth))
+                    deathDirections.Add(childState.playerMove.Value);
+
+            return deathDirections;
+
+            //if (depth == 0)
+            //    return Enumerable.Empty<Direction>();
+
+            //var childStates = gameState.GetChildStates();
+
+            //var deathDirections = childStates.GroupBy(s => s.playerMove)
+            //                                 .Where(g => g.Any(s => IsDeadForState(s.state, depth - 1)))
+            //                                 .Select(g => g.Key.Value)
+            //                                 .ToList();
+
+            //return deathDirections;
+        }
+
+        private static bool IsDeadInAllChildStates(GameState gameState, uint depth)
+        {
+            if (depth == 1)
+                return false;
+
+            return gameState.GetChildStates().All(s => s.state.PlayerIsDead || IsDeadInAllChildStates(s.state, depth - 1));
+        }
+
+        //private static bool IsDeadForState(GameState gameState, uint depth)
+        //{
+        //    if (depth == 0)
+        //        return false;
+
+        //    return gameState.PlayerIsDead || gameState.GetChildStates().All(s => IsDeadForState(s.state, depth - 1));
+        //}
+    }
+
+    internal class GameState
+    {
+        private readonly GameConfiguration _Configuration;
+        private readonly List<Player> _Players;
+
+        public IEnumerable<Player> Players => _Players;
+        public bool PlayerIsDead => !_Players.Any(p => p.IsControlledPlayer);
+
+        public GameState(GameConfiguration configuration, IEnumerable<Player> players)
+        {
+            _Configuration = configuration;
+            _Players = players.ToList();
+        }
+
+        public GameState(GameState gameState)
+        {
+            _Configuration = gameState._Configuration;
+            _Players = gameState.Players.Select(p => new Player(p)).ToList();
+        }
+
+        public IEnumerable<(GameState state, Direction? playerMove)> GetChildStates()
+        {
+            var helper = new Helper(_Configuration);
+            var controlledPlayerKey = Players.Single(p => p.IsControlledPlayer).Key;
+            var moves = new List<(string playerKey, Direction move)>();
+            foreach (var player in Players)
+                foreach (var direction in helper.GetAvailableDirections(player.Pos, player.Direction, player.LinePoints))
+                    moves.Add((player.Key, direction));
+
+            var moveVariants = Combine(moves.GroupBy(m1 => m1.playerKey, m2 => m2.move, (k, g) => (k, g)));
+
+            var childStates = new List<(GameState state, Direction? playerMove)>();
+            foreach (var variant in moveVariants)
+            {
+                var state = new GameState(this);
+                foreach (var playerMove in variant)
+                    state.Players.Single(p => p.Key == playerMove.playerKey).Move(playerMove.direction);
+
+                state.CalculateCollisions();
+                Direction? controlledPlayerMove = null;
+                if (variant.Any(p => p.playerKey == controlledPlayerKey))
+                    controlledPlayerMove = variant.Single(p => p.playerKey == controlledPlayerKey).direction;
+
+                childStates.Add((state, controlledPlayerMove));
+            }
+
+            return childStates;
+        }
+
+        private static IEnumerable<IEnumerable<(string playerKey, Direction direction)>> Combine(IEnumerable<(string playerKey, IEnumerable<Direction> availableDirections)> playersDirections)
+        {
+            var playersDirectionsArr = playersDirections.Select(pd => new { PlayerKey = pd.playerKey, Directions = pd.availableDirections.ToArray() }).ToArray();
+            var combinationsCount = 1;
+
+            foreach (var playerDirections in playersDirectionsArr)
+                combinationsCount *= playerDirections.Directions.Length;
+
+            var combinationsGrid = new Direction[playersDirectionsArr.Length, combinationsCount];
+            var totalCombs = 1;
+            for (var p = 0; p < playersDirectionsArr.Length; ++p)
+            {
+                var dirCount = playersDirectionsArr[p].Directions.Length;
+                totalCombs *= dirCount;
+                for (var c = 0; c < combinationsCount; ++c)
+                {
+                    combinationsGrid[p, c] = playersDirectionsArr[p].Directions[c / (combinationsCount / totalCombs) % dirCount];
+                }
+            }
+
+            var combinations = new List<IEnumerable<(string playerKey, Direction direction)>>();
+
+            for (var c = 0; c < combinationsCount; ++c)
+            {
+                var combination = new List<(string playerKey, Direction direction)>();
+
+                for (var p = 0; p < playersDirectionsArr.Length; ++p)
+                {
+                    combination.Add((playersDirectionsArr[p].PlayerKey, combinationsGrid[p, c]));
+                }
+
+                combinations.Add(combination);
+            }
+
+            return combinations;
+        }
+
+        private void CalculateCollisions()
+        {
+            var killedPlayers = new List<Player>();
+            foreach (var player in _Players)
+            {
+                var killed = false;
+                var collidedPlayers = _Players.Where(p => p != player && p.Pos == player.Pos);
+                foreach (var collidedPlayer in collidedPlayers)
+                    if (player.LinePoints.Count() >= collidedPlayer.LinePoints.Count())
+                    {
+                        killedPlayers.Add(player);
+                        killed = true;
+
+                        break;
+                    }
+
+                if (!killed && player.LinePoints.Any(lp => _Players.Any(p => lp == p.Pos)))
+                {
+                    killedPlayers.Add(player);
+
+                    continue;
+                }
+            }
+
+            foreach (var player in killedPlayers)
+                _Players.Remove(player);
+        }
+    }
+
+    internal class Player
+    {
+        private readonly List<Position> _LinePoints;
+        private readonly List<Position> _Territory;
+
+        public string Key { get; }
+        public Position Pos { get; private set; }
+        public Direction Direction { get; private set; }
+        public IEnumerable<Position> Territory => _Territory;
+        public IEnumerable<Position> LinePoints => _LinePoints;
+        public bool IsControlledPlayer { get; }
+
+        public Player(string key, Position pos, Direction direction, IEnumerable<Position> territory, IEnumerable<Position> linePoints, bool isControlledPlayer)
+        {
+            Key = key;
+            Pos = pos;
+            Direction = direction;
+            _Territory = territory.ToList();
+            _LinePoints = linePoints.ToList();
+            IsControlledPlayer = isControlledPlayer;
+        }
+
+        public Player(Player player)
+        {
+            Key = player.Key;
+            Pos = new Position(player.Pos.X, player.Pos.Y);
+            Direction = player.Direction;
+            _Territory = player.Territory.ToList();
+            _LinePoints = player.LinePoints.ToList();
+            IsControlledPlayer = player.IsControlledPlayer;
+        }
+
+        public void Move(Direction direction)
+        {
+            if (Helper.OppositeDirection(Direction) == direction)
+                throw new System.Exception("Cannot move in opposite direction.");
+
+            Direction = direction;
+
+            if (!_Territory.Contains(Pos))
+                _LinePoints.Add(Pos);
+
+            Pos = Pos.Move(direction);
+
+            if (_Territory.Contains(Pos))
+            {
+                //TODO Territory addition.
+                _LinePoints.Clear();
+            }
         }
     }
 }
