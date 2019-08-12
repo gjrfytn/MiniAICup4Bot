@@ -235,7 +235,7 @@ namespace MiniAICup4Bot
                         var newPos = _PlayerPos.Move(direction);
                         var territory = _TickData.ThisPlayer.Territory.Select(t => _Helper.ToElementaryCellPos(t)).ToArray();
 
-                        if (!territory.Any(t => t == newPos) && _TickData.OtherPlayers.Min(p => Helper.Distance(_Helper.ToElementaryCellPos(p.Position), newPos)) <= 2)
+                        if (!territory.Any(t => t == newPos) && _TickData.OtherPlayers.Min(p => Helper.Distance(_Helper.ToElementaryCellPos(p.Position), newPos)) <= 3)
                         {
                             var neighbourTerritory = territory.FirstOrDefault(t => Helper.Distance(_PlayerPos, t) == 1);
                             if (neighbourTerritory != null)
@@ -254,6 +254,8 @@ namespace MiniAICup4Bot
 
                 return GoTo(mirroredPos);
             }
+            else if (ClosestTerritory.distance == 1)
+                return GoTo(ClosestTerritory.pos);
             else
                 return GoTo(FurthestTerritory.pos);
         }
@@ -310,6 +312,16 @@ namespace MiniAICup4Bot
 
         private Direction? Flee()
         {
+            Direction GoHome()
+            {
+                var direction = GoTo(ClosestTerritory.pos);
+
+                if (!_SafeDirections.Contains(direction))
+                    return _SafeDirections.First(); //TODO
+
+                return direction;
+            }
+
             if (!_SafeDirections.Any())
                 return GoTo(ClosestTerritory.pos);
 
@@ -317,22 +329,21 @@ namespace MiniAICup4Bot
                 return _SafeDirections.Single();
 
             const int reassuranceDist = 4;
+            var fleeDist = ClosestTerritory.distance + reassuranceDist;
 
             if (ClosestTerritory.distance >= 2)
-                foreach (var linePoint in _TickData.ThisPlayer.Lines.Select(lp => _Helper.ToElementaryCellPos(lp)))
-                    foreach (var player in _TickData.OtherPlayers)
+                foreach (var player in _TickData.OtherPlayers)
+                {
+                    var playerPos = _Helper.ToElementaryCellPos(player.Position);
+                    if (Helper.Distance(ClosestTerritory.pos, playerPos) <= fleeDist)
+                        return GoHome();
+
+                    foreach (var linePoint in _TickData.ThisPlayer.Lines.Select(lp => _Helper.ToElementaryCellPos(lp)))
                     {
-                        var dist = Helper.Distance(linePoint, _Helper.ToElementaryCellPos(player.Position));
-                        if (dist <= ClosestTerritory.distance + reassuranceDist)
-                        {
-                            var direction = GoTo(ClosestTerritory.pos);
-
-                            if (!_SafeDirections.Contains(direction))
-                                return _SafeDirections.First(); //TODO
-
-                            return direction;
-                        }
+                        if (Helper.Distance(linePoint, playerPos) <= fleeDist)
+                            return GoHome();
                     }
+                }
 
             return null;
         }
