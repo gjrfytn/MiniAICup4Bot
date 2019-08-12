@@ -8,9 +8,9 @@ namespace MiniAICup4Bot
     {
         private static void Main()
         {
-            #if DEBUG
+#if DEBUG
             System.Threading.Thread.Sleep(3000);
-            #endif
+#endif
 
             var configuration = new GameConfiguration(System.Console.ReadLine());
 
@@ -44,7 +44,7 @@ namespace MiniAICup4Bot
 
     internal class Bot
     {
-        private const int _PredictorDistance = 4;
+        private const int _PredictorDistance = 4; //TODO 4?
 
         private readonly GameConfiguration _Configuration;
 
@@ -230,20 +230,7 @@ namespace MiniAICup4Bot
                 if (!_TickData.ThisPlayer.Lines.Any())
                 {
                     if (_TickData.OtherPlayers.Any())
-                    {
-                        var direction = GoTo(_Helper.ToElementaryCellPos(_TickData.OtherPlayers.First().Territory.First()));
-                        var newPos = _PlayerPos.Move(direction);
-                        var territory = _TickData.ThisPlayer.Territory.Select(t => _Helper.ToElementaryCellPos(t)).ToArray();
-
-                        if (!territory.Any(t => t == newPos) && _TickData.OtherPlayers.Min(p => Helper.Distance(_Helper.ToElementaryCellPos(p.Position), newPos)) <= 3)
-                        {
-                            var neighbourTerritory = territory.FirstOrDefault(t => Helper.Distance(_PlayerPos, t) == 1);
-                            if (neighbourTerritory != null)
-                                return GoTo(neighbourTerritory);
-                        }
-
-                        return direction;
-                    }
+                        return GoTo(_Helper.ToElementaryCellPos(_TickData.OtherPlayers.First().Territory.First()));
 
                     var rand = new System.Random();
 
@@ -339,10 +326,8 @@ namespace MiniAICup4Bot
                         return GoHome();
 
                     foreach (var linePoint in _TickData.ThisPlayer.Lines.Select(lp => _Helper.ToElementaryCellPos(lp)))
-                    {
                         if (Helper.Distance(linePoint, playerPos) <= fleeDist)
                             return GoHome();
-                    }
                 }
 
             return null;
@@ -350,7 +335,7 @@ namespace MiniAICup4Bot
 
         private void FindSafeDirections()
         {
-            var dangerousDirections = GameState.Players.Count() > 1 ? Predictor.GetDeathDirections(GameState, _PredictorDistance) : Enumerable.Empty<Direction>(); //TODO 4?
+            var dangerousDirections = GameState.Players.Count() > 1 ? Predictor.GetDeathDirections(GameState, _PredictorDistance) : Enumerable.Empty<Direction>();
 
             _SafeDirections = _AvailableDirections.Except(dangerousDirections);
         }
@@ -673,52 +658,25 @@ namespace MiniAICup4Bot
 
     internal static class Predictor
     {
-        public static IEnumerable<Direction> GetDeathDirections(GameState gameState, uint depth)
+        public static IEnumerable<Direction> GetDeathDirections(GameState gameState, uint depth) => GetDirectionStatuses(gameState, depth).Where(s => s.dead).Select(s => s.direction);
+
+        private static bool IsDeadForState(GameState gameState, uint depth)
         {
-            if (depth == 0)
-                return Enumerable.Empty<Direction>();
+            if (gameState.PlayerIsDead)
+                return true;
 
-            var childStates = gameState.GetChildStates();
-
-            var deathDirections = childStates.GroupBy(s => s.playerMove)
-                                             .Where(g => g.Any(s => s.state.PlayerIsDead))
-                                             .Select(g => g.Key.Value)
-                                             .ToList();
-
-            foreach (var childState in childStates.Where(s => !s.state.PlayerIsDead))
-                if (IsDeadInAllChildStates(childState.state, depth))
-                    deathDirections.Add(childState.playerMove.Value);
-
-            return deathDirections;
-
-            //if (depth == 0)
-            //    return Enumerable.Empty<Direction>();
-
-            //var childStates = gameState.GetChildStates();
-
-            //var deathDirections = childStates.GroupBy(s => s.playerMove)
-            //                                 .Where(g => g.Any(s => IsDeadForState(s.state, depth - 1)))
-            //                                 .Select(g => g.Key.Value)
-            //                                 .ToList();
-
-            //return deathDirections;
-        }
-
-        private static bool IsDeadInAllChildStates(GameState gameState, uint depth)
-        {
-            if (depth == 1)
+            if (depth <= 0)
                 return false;
 
-            return gameState.GetChildStates().All(s => s.state.PlayerIsDead || IsDeadInAllChildStates(s.state, depth - 1));
+            return GetDirectionStatuses(gameState, depth).All(s => s.dead);
         }
 
-        //private static bool IsDeadForState(GameState gameState, uint depth)
-        //{
-        //    if (depth == 0)
-        //        return false;
-
-        //    return gameState.PlayerIsDead || gameState.GetChildStates().All(s => IsDeadForState(s.state, depth - 1));
-        //}
+        public static IEnumerable<(Direction direction, bool dead)> GetDirectionStatuses(GameState gameState, uint depth)
+        {
+            return gameState.GetChildStates()
+                            .GroupBy(s => s.playerMove.Value, s => s.state, (k, g) => new { Direction = k, States = g })
+                            .Select(g => (g.Direction, g.States.Any(s => IsDeadForState(s, depth - 1))));
+        }
     }
 
     internal class GameState
@@ -746,9 +704,22 @@ namespace MiniAICup4Bot
             var helper = new Helper(_Configuration);
             var controlledPlayerKey = Players.Single(p => p.IsControlledPlayer).Key;
             var moves = new List<(string playerKey, Direction move)>();
+
+            var lockedPlayers = new List<Player>();
             foreach (var player in Players)
-                foreach (var direction in helper.GetAvailableDirections(player.Pos, player.Direction, player.LinePoints))
+            {
+                var availableDirections = helper.GetAvailableDirections(player.Pos, player.Direction, player.LinePoints);
+
+                if (!availableDirections.Any())
+                {
+                    moves.Add((player.Key, player.Direction));
+
+                    continue;
+                }
+
+                foreach (var direction in availableDirections)
                     moves.Add((player.Key, direction));
+            }
 
             var moveVariants = Combine(moves.GroupBy(m1 => m1.playerKey, m2 => m2.move, (k, g) => (k, g)));
 
@@ -756,8 +727,11 @@ namespace MiniAICup4Bot
             foreach (var variant in moveVariants)
             {
                 var state = new GameState(this);
+
+                state.CalculateFaceToFaceCollisions(variant.ToDictionary(k => k.playerKey, e => e.direction));
+
                 foreach (var playerMove in variant)
-                    state.Players.Single(p => p.Key == playerMove.playerKey).Move(playerMove.direction);
+                    state.Players.SingleOrDefault(p => p.Key == playerMove.playerKey)?.Move(playerMove.direction);
 
                 state.CalculateCollisions();
                 Direction? controlledPlayerMove = null;
@@ -785,9 +759,7 @@ namespace MiniAICup4Bot
                 var dirCount = playersDirectionsArr[p].Directions.Length;
                 totalCombs *= dirCount;
                 for (var c = 0; c < combinationsCount; ++c)
-                {
                     combinationsGrid[p, c] = playersDirectionsArr[p].Directions[c / (combinationsCount / totalCombs) % dirCount];
-                }
             }
 
             var combinations = new List<IEnumerable<(string playerKey, Direction direction)>>();
@@ -797,9 +769,7 @@ namespace MiniAICup4Bot
                 var combination = new List<(string playerKey, Direction direction)>();
 
                 for (var p = 0; p < playersDirectionsArr.Length; ++p)
-                {
                     combination.Add((playersDirectionsArr[p].PlayerKey, combinationsGrid[p, c]));
-                }
 
                 combinations.Add(combination);
             }
@@ -829,6 +799,27 @@ namespace MiniAICup4Bot
 
                     continue;
                 }
+            }
+
+            foreach (var player in killedPlayers)
+                _Players.Remove(player);
+        }
+
+        private void CalculateFaceToFaceCollisions(IDictionary<string, Direction> playerNewMoves)
+        {
+            var killedPlayers = new List<Player>();
+            foreach (var player in _Players)
+            {
+                var collidedPlayers = _Players.Where(p => p != player &&
+                                                          p.Pos.Move(playerNewMoves[p.Key]) == player.Pos &&
+                                                          p.Pos == player.Pos.Move(playerNewMoves[player.Key]));
+                foreach (var collidedPlayer in collidedPlayers)
+                    if (player.LinePoints.Count() >= collidedPlayer.LinePoints.Count())
+                    {
+                        killedPlayers.Add(player);
+
+                        break;
+                    }
             }
 
             foreach (var player in killedPlayers)
