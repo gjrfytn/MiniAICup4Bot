@@ -228,23 +228,38 @@ namespace MiniAICup4Bot
             if (lineLength <= 10)
             {
                 if (!_TickData.ThisPlayer.Lines.Any())
-                {
                     if (_TickData.OtherPlayers.Any())
-                        return GoTo(_Helper.ToElementaryCellPos(_TickData.OtherPlayers.First().Territory.First()));
+                    {
+                        var direction1 = GoTo(_Helper.ToElementaryCellPos(_TickData.OtherPlayers.First().Territory.First()));
 
-                    var rand = new System.Random();
+                        if (DirectionIsSafe(direction1))
+                            return direction1;
+                    }
+                    else
+                    {
+                        var rand = new System.Random();
 
-                    return GoTo(new Position(rand.Next((int)_Configuration.XCellsCount), rand.Next((int)_Configuration.YCellsCount)));
+                        return GoTo(new Position(rand.Next((int)_Configuration.XCellsCount), rand.Next((int)_Configuration.YCellsCount)));
+                    }
+                else
+                {
+                    var mirroredPos = new Position(2 * _PlayerPos.X - ClosestTerritory.pos.X, 2 * _PlayerPos.Y - ClosestTerritory.pos.Y);
+
+                    var direction2 = GoTo(mirroredPos);
+                    if (DirectionIsSafe(direction2))
+                        return direction2;
                 }
-
-                var mirroredPos = new Position(2 * _PlayerPos.X - ClosestTerritory.pos.X, 2 * _PlayerPos.Y - ClosestTerritory.pos.Y);
-
-                return GoTo(mirroredPos);
             }
             else if (ClosestTerritory.distance == 1)
                 return GoTo(ClosestTerritory.pos);
             else
-                return GoTo(FurthestTerritory.pos);
+            {
+                var direction = GoTo(FurthestTerritory.pos);
+                if (DirectionIsSafe(direction))
+                    return direction;
+            }
+
+            return _SafeDirections.First();
         }
 
         private Direction? Attack()
@@ -271,11 +286,18 @@ namespace MiniAICup4Bot
                 }
 
                 if (targetLinePoint != null)
-                    return GoTo(targetLinePoint);
+                {
+                    var direction = GoTo(targetLinePoint);
+
+                    if (DirectionIsSafe(direction))
+                        return direction;
+                }
             }
 
             return null;
         }
+
+        private bool DirectionIsSafe(Direction direction) => _SafeDirections.Contains(direction);
 
         private Direction? PickUpBonus()
         {
@@ -283,7 +305,11 @@ namespace MiniAICup4Bot
 
             foreach (var bonus in _TickData.Bonuses.Where(b => b.type == BonusType.Nitro || b.type == BonusType.Saw).Select(b => _Helper.ToElementaryCellPos(b.position)))
                 if (Helper.Distance(_PlayerPos, bonus) <= pickUpRange)
-                    return GoTo(bonus);
+                {
+                    var direction = GoTo(bonus);
+                    if (DirectionIsSafe(direction))
+                        return direction;
+                }
 
             return null;
         }
@@ -303,7 +329,7 @@ namespace MiniAICup4Bot
             {
                 var direction = GoTo(ClosestTerritory.pos);
 
-                if (!_SafeDirections.Contains(direction))
+                if (!DirectionIsSafe(direction))
                     return _SafeDirections.First(); //TODO
 
                 return direction;
