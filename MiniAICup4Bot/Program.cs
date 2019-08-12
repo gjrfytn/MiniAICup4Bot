@@ -437,6 +437,9 @@ namespace MiniAICup4Bot
                 _Lines.Add(new BasicPosition(int.Parse(coords[0].Value), int.Parse(coords[1].Value)));
             }
 
+            if (_Lines.Count != 0)
+                _Lines.RemoveAt(_Lines.Count - 1);
+
             Direction = ParseDirection(element.Element("direction").Value);
 
             foreach (var bonusElement in element.Elements("bonuses"))
